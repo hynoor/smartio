@@ -1,0 +1,135 @@
+#! python sdd.py
+
+import os
+import sys
+import time
+import mmap
+import getopt
+
+
+def do_io(file_path, rw, io_size, count, skip, step, direct):
+    openmode = os.O_RDWR
+    if direct == 1:
+        openmode |= os.O_DIRECT
+    
+    # use mmap make it page aligned
+    buf = mmap.mmap(-1, io_size)
+    if rw == 'write':
+	pattern = '1' * io_size
+	buf.write(pattern)
+        io = os.write
+    elif rw == 'read':
+        io = os.read
+
+    try:
+	fd = os.open(file_path, openmode)
+        stop = (io_size + step) * count
+        step += io_size
+        for pos in xrange(skip, stop, step):
+            os.lseek(fd, pos, os.SEEK_CUR)
+            os.write(fd, buf)
+            print("dbg: %s (offset=%d, len=%d)" % (rw, pos, io_size))
+    except IOError as e:
+        print("EORR: Failed to perform DirectIO with error: %s" % str(e))
+    
+    return fd
+
+def usage():
+    print("smartio - A smart, lite IO tool")
+    print("smartio.py <OPTIONS>")
+    OPT = "\n"
+    OPT += "OPTIONs:\n"
+    OPT += "h: print help\n"
+    OPT += "--path   : Target file/block to be manipulated\n"
+    OPT += "--rw     : Write or read, accepts values: 'w', 'r', 'write', 'read'\n"
+    OPT += "--iosize : Size of each IO to be performed\n"
+    OPT += "--count  : Number of IO to be performed\n"
+    OPT += "--skip   : The starting offset\n"
+    OPT += "--step   : The offset interval between each IO\n"
+    OPT += "--direct : If use direct IO, accepts '1' and '0'\n"
+    OPT += "--lock   : If created Range lock before IO, accepts values 'exclusive', 'shared' and 'unlock'(verify on exclusive)\n"
+    OPT += "--hold   : Duration to hold after the completion of IO\n"
+
+    print(OPT)
+
+def stats():
+    """ summarize the performance stats
+    """
+    return
+
+def convert_size(raw):
+   return int(raw) 
+     
+    
+
+if __name__ == '__main__':
+    """ main test
+    """
+    if len(sys.argv) == 0:
+        useage()
+        sys.exit(-1)
+    # set default
+    fp = None
+    iosize = 512
+    count = 1
+    rw = 'read'
+    hold= 0
+    step = 0
+    skip = 0
+    lock= 'shared'
+    direct = 0
+   
+    try:
+        opts, args = getopt.getopt(
+                sys.argv[1:], 
+                'h:', [
+                          'help',
+                          'path=', 
+                          'rw=',
+                          'iosize=',
+                          'count=', 
+                          'hold=', 
+                          'lock=', 
+                          'skip=', 
+                          'step=', 
+                          'direct=']
+        )
+
+    except getopt.GetoptError as e:
+        # print help information and exit:
+        usage()
+        sys.exit("Wrong Input" % str(e))
+                    
+    for o, a in opts:
+        if o in ('--path'):
+            fp = a  
+        elif o in ('--rw'):
+            rw = a
+        elif o in ('--iosize'):
+            iosize=convert_size(a)
+        elif o in ('--rw'):
+            rw = a
+        elif o in ('--count'):
+            count = int(a)
+        elif o in ('--hold'):
+            hold = int(a)
+        elif o in ('--lock'):
+            lock = a
+        elif o in ('--skip'):
+            skip = convert_size(a)
+        elif o in ('--step'):
+            step = convert_size(a)
+        elif o in ('--direct'):
+            direct = int(a)
+        else:
+            assert False, usage()
+
+    myfd = do_io(fp,rw, iosize, count, skip, step, direct)
+    stats()
+    if hold != 0:
+        print("I/O completed, holding for %d seconds" % hold)
+        time.sleep(hold)
+    else:
+        print("Done")
+    os.close(myfd)
+
