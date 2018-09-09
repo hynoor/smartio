@@ -4,39 +4,91 @@ import os
 import sys
 import time
 import mmap
+import re
 import getopt
 
+platform = os.name
 
-def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, wait):
+if platform == 'posix':
+    import fcntl
+    import struct
+    # mode : (open_mode, lock_type, operation_type)
+    LOCK_MODES = {
+        'exclusive'        : ('r+b', fcntl.F_WRLCK, fcntl.F_SETLK),
+        'exclusive_io'     : ('r+b', fcntl.F_WRLCK, fcntl.F_SETLK),
+        'exclusive_blk'    : ('r+b', fcntl.F_WRLCK, fcntl.F_SETLKW),
+        'exclusive_blk_io' : ('r+b', fcntl.F_WRLCK, fcntl.F_SETLKW),
+        'shared'           : ('r+b', fcntl.F_RDLCK, fcntl.F_SETLK),
+        'unlock'           : ('r+b', fcntl.F_UNLCK, fcntl.F_SETLK),
+    }
+elif platform == 'nt':
+    import msvcrt
+    LOCK_MODES = {
+        'exclusive'        : ('r+b', msvcrt.LK_NBLCK),
+        'exclusive_io'     : ('r+b', msvcrt.LK_NBLCK),
+        'exclusive_blk'    : ('r+b', msvcrt.LK_LOCK),
+        'exclusive_blk_io' : ('r+b', msvcrt.LK_LOCK),
+        'shared'           : ('r+b', msvcrt.LK_NBRLCK),
+        'unlock'           : ('r+b', msvcrt.LK_UNLCK),
+    }
+else:
+    sys.exit("Unsupported Platform!")
+
+
+def timeit(method):
+    def timed(*args, **kw):
+        ts = time.time()
+        result = method(*args, **kw)
+        te = time.time()
+        if 'log_time' in kw:
+            name = kw.get('log_name', method.__name__.upper())
+            kw['log_time'][name] = int((te - ts) * 1000)
+        else:
+            print '%r  %2.2f ms' % \
+            (method.__name__, (te - ts) * 1000)
+        return result
+
+    return timed
+
+
+@timeit
+def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait):
     if rw == 'read' or rw == 'r':
         openmode = os.O_RDONLY
     elif rw == 'write' or rw == 'w':
         openmode = os.O_RDWR
     if direct == 1:
         openmode |= os.O_DIRECT
+    if lock:
+        do_lock = posix_lock
+    elif lock is None:
+        def do_lock(*args):
+            pass
 
     # use mmap make it page aligned
     buf = mmap.mmap(-1, io_size)
     buf.write(pattern)
 
-    try:
-        fd = os.open(file_path, openmode)
-        stop = (io_size + step) * count
-        step += io_size
-        print("dbg: [%d, %d %d]" %(skip, stop, step))
-        for pos in xrange(skip, stop, step):
+    fd = os.open(file_path, openmode)
+    stop = (io_size + step) * count
+    step += io_size
+    print("dbg: [%d, %d %d]" %(skip, stop, step))
+    for pos in xrange(skip, stop, step):
+        try:
             os.lseek(fd, pos, os.SEEK_CUR)
             if rw == 'write' or rw == 'w':
+                do_lock(fd, lock, pos, io_size, None)
                 os.write(fd, buf)
             elif rw == 'read' or rw == 'r':
                 buf = os.read(fd, io_size)
-                print("dbg: %s" % buf)
-            elif rw == 'noop':
+            elif rw == 'noop' or rw is None:
+                do_lock(fd, lock, pos, io_size, None)
                 pass
-            print("dbg: %s (offset=%d, len=%d)" % (rw, pos, io_size))
+            #print("dbg: %s (offset=%d, len=%d)" % (rw, pos, io_size))
             time.sleep(wait)
-    except IOError as e:
-        print("EORR: Failed to perform DirectIO with error: %s" % str(e))
+        except IOError as e:
+            print("IO Eorr [offset=%d, len=%d]  failed  with error: %s" % (pos, io_size, str(e)))
+            os.close(fd)
 
     return fd
 
@@ -72,23 +124,46 @@ def stats():
     return  #TBD
 
 
-def convert_size(raw):
-   return int(raw) #TBD
-     
+def convert_size(rawsize):
+    """ convert non-byte to byte
+    param raw_size  : passed raw size
+    return size     : size in byte
+    """
+    sm = re.search('^(\d+)(\w{1,2})?', str(rawsize))
+    if sm:
+        number = sm.group(1)
+        if sm.group(2):
+            unit = sm.group(2)
+            if unit.upper() == 'B':
+                return int(number)
+            elif unit.upper() == 'K' or unit.upper() == 'KB':
+                return int(number) * 1024
+            elif unit.upper() == 'M' or unit.upper() == 'MB':
+                return int(number) * 1024 * 1024
+            elif unit.upper() == 'G' or unit.upper() == 'GB':
+                return int(number) * 1024 * 1024 * 1024
+            elif unit.upper() == 'T' or unit.upper() == 'TB':
+                return int(number) * 1024 * 1024 * 1024 * 1024
+            elif unit.upper() == 'P' or unit.upper() == 'PB':
+                return int(number) * 1024 * 1024 * 1024 * 1024 * 1024
+            else:
+                sys.exit("ERR: Invalid unit: %s" % unit)
+        else:
+            return int(number)
+    else:
+        return rawsize
 
-def posix_lock(fd, lockmode, offset,length, data):
+
+def posix_lock(fd, mode, offset, length, data):
     """ posix locks
     """
-    fh = self._filehandle
-    mode = lock_mode
-    data = self._data
-    lockdata = struct.pack('hhllhh', self._LOCK_MODES[mode][1], \
+    lockdata = struct.pack('hhllhh', LOCK_MODES[mode][1], \
             0, offset, length, 0, 0)
 
     if data:
         if mode == 'exclusive_io' or mode == 'exclusive_blk_io':
-            rv = fcntl.fcntl(fh, self._LOCK_MODES[mode][2], lockdata)
-            fh.seek(offset)
+            rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
+            os.lseek(fd, offset, os.SEEK_CUR)
             # truncate extra content which exceeds end offest
             fh.write(data)
         elif mode == 'shared' or mode == 'unlock':
@@ -100,17 +175,14 @@ def posix_lock(fd, lockmode, offset,length, data):
             fh.seek(offset)
             readdata = fh.read(len(self._data))
             if readdata != data:
-                sys.exit("ERROR: data verification failed. expect: %s | actual: %s" % (data, readdata))
-        rv = fcntl.fcntl(fh, self._LOCK_MODES[mode][2], lockdata)
+                print("ERR: DMC! expect: %s | actual: %s" % (data, readdata))
+                sys.exit(-1)
+        rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
     else:
-        rv = fcntl.fcntl(fh, self._LOCK_MODES[mode][2], lockdata)
+        rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
 
 
-def random_string(size=8, seed=None):
-    """ generate a random string
-    """
-    :param size : length of target string to be generated
-    :param seed : seed to be used for generating string
+
 if __name__ == '__main__':
     """ main test
     """
@@ -179,8 +251,8 @@ if __name__ == '__main__':
             direct = int(a)
         else:
             assert False, usage()
-
-    myfd = do_io(fp, rw, iopattern, iosize, iocount, skip, step, direct, wait)
+    print(iosize)
+    myfd = do_io(fp, rw, iopattern, iosize, iocount, skip, step, direct, lock, wait)
     stats()
     if hold != 0:
         print("I/O completed, holding for %d seconds" % hold)
