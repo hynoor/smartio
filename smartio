@@ -7,6 +7,10 @@ import mmap
 import re
 import getopt
 
+import pdb
+
+gspent = 0
+glocks = []
 platform = os.name
 
 if platform == 'posix':
@@ -35,17 +39,19 @@ else:
     sys.exit("Unsupported Platform!")
 
 
+
 def timeit(method):
     def timed(*args, **kw):
         ts = time.time()
         result = method(*args, **kw)
         te = time.time()
+        global gspent
+        gspent = (te - ts) * 1000
         if 'log_time' in kw:
             name = kw.get('log_name', method.__name__.upper())
-            kw['log_time'][name] = int((te - ts) * 1000)
+            kw['log_time'][name] = int(gspent)
         else:
-            print '%r  %2.2f ms' % \
-            (method.__name__, (te - ts) * 1000)
+            print '%r  %2.2f ms' % (method.__name__, gspent)
         return result
 
     return timed
@@ -56,18 +62,24 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait
     if rw == 'read' or rw == 'r':
         openmode = os.O_RDONLY
     elif rw == 'write' or rw == 'w':
-        openmode = os.O_RDWR
+        openmode = os.O_RDWR 
+        openmode |= os.O_CREAT
     if direct == 1:
         openmode |= os.O_DIRECT
+
+    global glocks
     if lock:
         do_lock = posix_lock
     elif lock is None:
         def do_lock(*args):
             pass
-
-    # use mmap make it page aligned
-    buf = mmap.mmap(-1, io_size)
-    buf.write(pattern)
+    pdb.set_trace()
+    if direct:
+        # use mmap make it page aligned
+        buf = mmap.mmap(-1, io_size)
+        buf.write(pattern * (io_size//len(pattern)) + pattern[:io_size%len(pattern)])
+    else:
+        buf = pattern * (io_size//len(pattern)) + pattern[:io_size%len(pattern)]
 
     fd = os.open(file_path, openmode)
     stop = (io_size + step) * count
@@ -78,11 +90,15 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait
             os.lseek(fd, pos, os.SEEK_CUR)
             if rw == 'write' or rw == 'w':
                 do_lock(fd, lock, pos, io_size, None)
+                glocks.append((pos, io_size))
                 os.write(fd, buf)
             elif rw == 'read' or rw == 'r':
+                do_lock(fd, lock, pos, io_size, None)
+                glocks.append((pos, io_size))
                 buf = os.read(fd, io_size)
             elif rw == 'noop' or rw is None:
                 do_lock(fd, lock, pos, io_size, None)
+                glocks.append((pos, io_size))
                 pass
             #print("dbg: %s (offset=%d, len=%d)" % (rw, pos, io_size))
             time.sleep(wait)
@@ -118,10 +134,17 @@ def usage():
     print(OPT)
 
 
-def stats():
+def stats(fp, iosize, count):
     """ summarize the performance stats
     """
-    return  #TBD
+    stats = "\n[stats]\n"
+    stats += "target      : %s\n"
+    stats += "io size     : %d\n"
+    stats += "io count    : %d\n"
+    stats += "total size  : %d\n"
+    stats += "io duration : %2.2f ms\n"
+    print(stats % (fp, iosize, count, iosize*count, gspent))
+
 
 
 def convert_size(rawsize):
@@ -139,13 +162,13 @@ def convert_size(rawsize):
             elif unit.upper() == 'K' or unit.upper() == 'KB':
                 return int(number) * 1024
             elif unit.upper() == 'M' or unit.upper() == 'MB':
-                return int(number) * 1024 * 1024
+                return int(number) * 1024 ** 2
             elif unit.upper() == 'G' or unit.upper() == 'GB':
-                return int(number) * 1024 * 1024 * 1024
+                return int(number) * 1024 ** 3
             elif unit.upper() == 'T' or unit.upper() == 'TB':
-                return int(number) * 1024 * 1024 * 1024 * 1024
+                return int(number) * 1024 ** 4
             elif unit.upper() == 'P' or unit.upper() == 'PB':
-                return int(number) * 1024 * 1024 * 1024 * 1024 * 1024
+                return int(number) * 1024 ** 5
             else:
                 sys.exit("ERR: Invalid unit: %s" % unit)
         else:
@@ -182,6 +205,29 @@ def posix_lock(fd, mode, offset, length, data):
         rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
 
 
+def patterns(pattern):
+    """ return requested io pattern
+    """
+    if pattern == 'one':
+        return '\xff'
+    elif pattern == 'zero':
+        return '\x00'
+    elif pattern == 'rand' or pattern == 'random':
+        return 'TBD'
+    else:
+        return pattern
+
+
+def post(fd, hold):
+    """ cleanup after hold
+    """
+    print("I/O completed, holding for %d seconds" % hold)
+    time.sleep(hold)
+    for lck in glocks:
+        posix_lock(fd, 'unlock', lck[0], lck[1], None)
+        #print("dbg: unlock [offset=%d, len=%d]" % (lck[0], lck[1]))
+    os.close(fd)
+
 
 if __name__ == '__main__':
     """ main test
@@ -192,7 +238,7 @@ if __name__ == '__main__':
     # set default
     fp = None
     iosize = 512
-    iopattern = '1' * iosize
+    iopattern = None
     iocount = 1
     rw = 'read'
     wait = 0
@@ -200,7 +246,7 @@ if __name__ == '__main__':
     step = 0
     skip = 0
     lock= 'shared'
-    direct = 0
+    direct = 1
    
     try:
         opts, args = getopt.getopt(
@@ -210,6 +256,8 @@ if __name__ == '__main__':
                           'path=', 
                           'rw=',
                           'iosize=',
+                          'blocksize=',
+                          'bs=',
                           'pattern=',
                           'count=', 
                           'wait=', 
@@ -229,10 +277,10 @@ if __name__ == '__main__':
             fp = a  
         elif o in ('--rw'):
             rw = a
-        elif o in ('--iosize'):
+        elif o in ('--iosize', '--blocksize', '--bs'):
             iosize=convert_size(a)
         elif o in ('--pattern'):
-            iopattern = get_pattern(a)
+            iopattern = patterns(a)
         elif o in ('--rw'):
             rw = a
         elif o in ('--count'):
@@ -251,13 +299,7 @@ if __name__ == '__main__':
             direct = int(a)
         else:
             assert False, usage()
-    print(iosize)
-    myfd = do_io(fp, rw, iopattern, iosize, iocount, skip, step, direct, lock, wait)
-    stats()
-    if hold != 0:
-        print("I/O completed, holding for %d seconds" % hold)
-        time.sleep(hold)
-    else:
-        print("Done")
-    os.close(myfd)
+
+    post(do_io(fp, rw, iopattern, iosize, iocount, skip, step, direct, lock, wait), hold)
+    stats(fp, iosize, iocount)
 
