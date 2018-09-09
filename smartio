@@ -14,13 +14,13 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, wait):
         openmode = os.O_RDWR
     if direct == 1:
         openmode |= os.O_DIRECT
-    
+
     # use mmap make it page aligned
     buf = mmap.mmap(-1, io_size)
     buf.write(pattern)
 
     try:
-	fd = os.open(file_path, openmode)
+        fd = os.open(file_path, openmode)
         stop = (io_size + step) * count
         step += io_size
         print("dbg: [%d, %d %d]" %(skip, stop, step))
@@ -37,28 +37,34 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, wait):
             time.sleep(wait)
     except IOError as e:
         print("EORR: Failed to perform DirectIO with error: %s" % str(e))
-    
+
     return fd
 
 
+def nt_lock(offset, length, mode):
+    """ create NT lock
+    """
+    return 
+
+
 def usage():
-    print("smartio - A smart, lite IO tool")
+    print("SmartIO - A smart, lite IO tool")
     print("smartio.py <OPTIONS>")
     OPT = "\n"
-    OPT += "OPTIONs:\n"
-    OPT += "h: print help\n"
-    OPT += "--path   : Target file/block to be manipulated\n"
-    OPT += "--rw     : Write or read, accepts values: 'w', 'r', 'write', 'read' and 'null'\n"
-    OPT += "--iosize : Size of each IO to be performed\n"
-    OPT += "--count  : Number of IO to be performed\n"
-    OPT += "--skip   : The starting offset\n"
-    OPT += "--step   : The offset interval between each IO\n"
-    OPT += "--direct : If use direct IO, accepts '1' and '0'\n"
-    OPT += "--lock   : If created Range lock before IO, accepts values 'exclusive', 'shared' and 'unlock'(verify on exclusive)\n"
-    OPT += "--wait   : Duration of wait in between ech IO\n"
-    OPT += "--hold   : Duration to hold after the completion of IO\n"
+    OPT += "OPTIONs:\n\n"
+    OPT += "    --path   : Target file/block to be manipulated\n\n"
+    OPT += "    --rw     : Write or read, accepts values: 'w', 'r', 'write', 'read' and 'null'\n\n"
+    OPT += "    --iosize : Size of each IO to be performed\n\n"
+    OPT += "    --count  : Number of IO to be performed\n\n"
+    OPT += "    --skip   : The starting offset\n\n"
+    OPT += "    --step   : The offset interval between each IO\n\n"
+    OPT += "    --direct : Indicate if use direct IO, accepts '1' and '0'\n\n"
+    OPT += "    --lock   : Indicate if create range lock before IO, accepts values 'exclusive', 'shared' and 'unlock'(verify on exclusive)\n\n"
+    OPT += "    --wait   : Duration of wait in between each IO\n\n"
+    OPT += "    --hold   : Duration to hold after the completion of IO\n\n\n\n"
 
     print(OPT)
+
 
 def stats():
     """ summarize the performance stats
@@ -70,11 +76,46 @@ def convert_size(raw):
    return int(raw) #TBD
      
 
+def posix_lock(fd, lockmode, offset,length, data):
+    """ posix locks
+    """
+    fh = self._filehandle
+    mode = lock_mode
+    data = self._data
+    lockdata = struct.pack('hhllhh', self._LOCK_MODES[mode][1], \
+            0, offset, length, 0, 0)
+
+    if data:
+        if mode == 'exclusive_io' or mode == 'exclusive_blk_io':
+            rv = fcntl.fcntl(fh, self._LOCK_MODES[mode][2], lockdata)
+            fh.seek(offset)
+            # truncate extra content which exceeds end offest
+            fh.write(data)
+        elif mode == 'shared' or mode == 'unlock':
+            # NOTE
+            # the minimal size of kernel read is one page (4KB)
+            # hence the read may failed if target bytes
+            # which page was overlappped on other byte(s)
+            # owned by other lockowners
+            fh.seek(offset)
+            readdata = fh.read(len(self._data))
+            if readdata != data:
+                sys.exit("ERROR: data verification failed. expect: %s | actual: %s" % (data, readdata))
+        rv = fcntl.fcntl(fh, self._LOCK_MODES[mode][2], lockdata)
+    else:
+        rv = fcntl.fcntl(fh, self._LOCK_MODES[mode][2], lockdata)
+
+
+def random_string(size=8, seed=None):
+    """ generate a random string
+    """
+    :param size : length of target string to be generated
+    :param seed : seed to be used for generating string
 if __name__ == '__main__':
     """ main test
     """
-    if len(sys.argv) == 0:
-        useage()
+    if len(sys.argv) == 1:
+        usage()
         sys.exit(-1)
     # set default
     fp = None
@@ -109,9 +150,8 @@ if __name__ == '__main__':
 
     except getopt.GetoptError as e:
         # print help information and exit:
-        usage()
-        sys.exit("Wrong Input" % str(e))
-                    
+        sys.exit("Parameter Error: %s" % str(e))
+
     for o, a in opts:
         if o in ('--path'):
             fp = a  
