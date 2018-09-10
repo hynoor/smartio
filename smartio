@@ -18,22 +18,22 @@ if platform == 'posix':
     import struct
     # mode : (open_mode, lock_type, operation_type)
     LOCK_MODES = {
-	'exclusive'	   : ('r+b', fcntl.F_WRLCK, fcntl.F_SETLK),
-	'exclusive_io'	   : ('r+b', fcntl.F_WRLCK, fcntl.F_SETLK),
-	'exclusive_blk'    : ('r+b', fcntl.F_WRLCK, fcntl.F_SETLKW),
-	'exclusive_blk_io' : ('r+b', fcntl.F_WRLCK, fcntl.F_SETLKW),
-	'shared'	   : ('r+b', fcntl.F_RDLCK, fcntl.F_SETLK),
-	'unlock'	   : ('r+b', fcntl.F_UNLCK, fcntl.F_SETLK),
+        'exclusive'        : ('r+b', fcntl.F_WRLCK, fcntl.F_SETLK),
+        'exclusive_io'     : ('r+b', fcntl.F_WRLCK, fcntl.F_SETLK),
+        'exclusive_blk'    : ('r+b', fcntl.F_WRLCK, fcntl.F_SETLKW),
+        'exclusive_blk_io' : ('r+b', fcntl.F_WRLCK, fcntl.F_SETLKW),
+        'shared'           : ('r+b', fcntl.F_RDLCK, fcntl.F_SETLK),
+        'unlock'           : ('r+b', fcntl.F_UNLCK, fcntl.F_SETLK),
     }
 elif platform == 'nt':
     import msvcrt
     LOCK_MODES = {
-	'exclusive'	   : ('r+b', msvcrt.LK_NBLCK),
-	'exclusive_io'	   : ('r+b', msvcrt.LK_NBLCK),
-	'exclusive_blk'    : ('r+b', msvcrt.LK_LOCK),
-	'exclusive_blk_io' : ('r+b', msvcrt.LK_LOCK),
-	'shared'	   : ('r+b', msvcrt.LK_NBRLCK),
-	'unlock'	   : ('r+b', msvcrt.LK_UNLCK),
+        'exclusive'        : ('r+b', msvcrt.LK_NBLCK),
+        'exclusive_io'     : ('r+b', msvcrt.LK_NBLCK),
+        'exclusive_blk'    : ('r+b', msvcrt.LK_LOCK),
+        'exclusive_blk_io' : ('r+b', msvcrt.LK_LOCK),
+        'shared'           : ('r+b', msvcrt.LK_NBRLCK),
+        'unlock'           : ('r+b', msvcrt.LK_UNLCK),
     }
 else:
     sys.exit("Unsupported Platform!")
@@ -41,17 +41,17 @@ else:
 
 def timeit(method):
     def timed(*args, **kw):
-	ts = time.time()
-	result = method(*args, **kw)
-	te = time.time()
-	global gspent
-	gspent = (te - ts) * 1000
-	if 'log_time' in kw:
-	    name = kw.get('log_name', method.__name__.upper())
-	    kw['log_time'][name] = int(gspent)
-	else:
-	    print '%r  %2.2f ms' % (method.__name__, gspent)
-	return result
+        ts = time.time()
+        result = method(*args, **kw)
+        te = time.time()
+        global gspent
+        gspent = (te - ts) * 1000
+        if 'log_time' in kw:
+            name = kw.get('log_name', method.__name__.upper())
+            kw['log_time'][name] = int(gspent)
+        else:
+            print '%r  %2.2f ms' % (method.__name__, gspent)
+        return result
 
     return timed
 
@@ -63,55 +63,55 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait
     global gwritecnt
 
     if rw in ['read', 'r', 'noop']:
-	openmode = os.O_RDONLY
+        openmode = os.O_RDONLY
     elif rw == 'write' or rw == 'w':
-	openmode = os.O_RDWR 
+        openmode = os.O_RDWR 
     elif rw == 'create' or rw == 'c':
-	openmode = os.O_RDWR 
-	openmode |= os.O_CREAT
+        openmode = os.O_RDWR 
+        openmode |= os.O_CREAT
     if direct == 1:
-	openmode |= os.O_DIRECT
+        openmode |= os.O_DIRECT
 
     if lock in ['exclusive']:
-	openmode |= os.O_RDWR 
+        openmode |= os.O_RDWR 
 
     if lock != 'noop':
-	do_lock = posix_lock
+        do_lock = posix_lock
     else:
-	def do_lock(*args):
-	    pass
+        def do_lock(*args):
+            pass
     if direct:
-	# use mmap make it page aligned
-	buf = mmap.mmap(-1, io_size)
-	buf.write(pattern * (io_size//len(pattern)) + pattern[:io_size%len(pattern)])
+        # use mmap make it page aligned
+        buf = mmap.mmap(-1, io_size)
+        buf.write(pattern * (io_size//len(pattern)) + pattern[:io_size%len(pattern)])
     else:
-	buf = pattern * (io_size//len(pattern)) + pattern[:io_size%len(pattern)]
+        buf = pattern * (io_size//len(pattern)) + pattern[:io_size%len(pattern)]
     try:
-	fd = os.open(file_path, openmode)
+        fd = os.open(file_path, openmode)
     except OSError as e:
-	exit("[err]: open failed, %s" % str(e))
+        exit("[err]: open failed, %s" % str(e))
     stop = skip + (io_size + step) * count
     step += io_size
     print("dbg: [%d, %d %d]" %(skip, stop, step))
     for idx, pos in enumerate(xrange(skip, stop, step), 1):
-	os.lseek(fd, pos, os.SEEK_SET)
-	try:
-	    if rw in ['write', 'w', 'create', 'c']:
-		do_lock(fd, lock, pos, io_size, None)
-		os.write(fd, buf)
-		gwritecnt += 1
-	    elif rw in ['read', 'r']:
-		do_lock(fd, lock, pos, io_size, None)
-		buf = os.read(fd, io_size)
-		greadcnt += 1
-	    elif rw == 'noop':
-		do_lock(fd, lock, pos, io_size, None)
-		pass
-	    print("dbg: %s #%d (offset=%d, len=%d)" % (rw,idx, pos, io_size))
-	    time.sleep(wait)
-	except IOError as e:
-	    print("IO Eorr [offset=%d, len=%d]	failed	with error: %s" % (pos, io_size, str(e)))
-	    os.close(fd)
+        os.lseek(fd, pos, os.SEEK_SET)
+        try:
+            if rw in ['write', 'w', 'create', 'c']:
+                do_lock(fd, lock, pos, io_size, None)
+                os.write(fd, buf)
+                gwritecnt += 1
+            elif rw in ['read', 'r']:
+                do_lock(fd, lock, pos, io_size, None)
+                buf = os.read(fd, io_size)
+                greadcnt += 1
+            elif rw == 'noop':
+                do_lock(fd, lock, pos, io_size, None)
+                pass
+            print("dbg: %s #%d (offset=%d, len=%d)" % (rw,idx, pos, io_size))
+            time.sleep(wait)
+        except IOError as e:
+            print("IO Eorr [offset=%d, len=%d]  failed  with error: %s" % (pos, io_size, str(e)))
+            os.close(fd)
 
     return fd
 
@@ -127,16 +127,16 @@ def usage():
     print("smartio.py <OPTIONS>")
     OPT = "\n"
     OPT += "OPTIONs:\n\n"
-    OPT += "	--path	 : Target file/block to be manipulated\n\n"
-    OPT += "	--rw	 : Write or read, accepts values: 'w', 'r', 'write', 'read' and 'null'\n\n"
-    OPT += "	--iosize : Size of each IO to be performed\n\n"
-    OPT += "	--count  : Number of IO to be performed\n\n"
-    OPT += "	--skip	 : The starting offset\n\n"
-    OPT += "	--step	 : The offset interval between each IO\n\n"
-    OPT += "	--direct : Indicate if use direct IO, accepts '1' and '0'\n\n"
-    OPT += "	--lock	 : Indicate if create range lock before IO, accepts values 'exclusive', 'shared' and 'unlock'(verify on exclusive)\n\n"
-    OPT += "	--wait	 : Duration of wait in between each IO\n\n"
-    OPT += "	--hold	 : Duration to hold after the completion of IO\n\n\n\n"
+    OPT += "    --path   : Target file/block to be manipulated\n\n"
+    OPT += "    --rw     : Write or read, accepts values: 'w', 'r', 'write', 'read' and 'null'\n\n"
+    OPT += "    --iosize : Size of each IO to be performed\n\n"
+    OPT += "    --count  : Number of IO to be performed\n\n"
+    OPT += "    --skip   : The starting offset\n\n"
+    OPT += "    --step   : The offset interval between each IO\n\n"
+    OPT += "    --direct : Indicate if use direct IO, accepts '1' and '0'\n\n"
+    OPT += "    --lock   : Indicate if create range lock before IO, accepts values 'exclusive', 'shared' and 'unlock'(verify on exclusive)\n\n"
+    OPT += "    --wait   : Duration of wait in between each IO\n\n"
+    OPT += "    --hold   : Duration to hold after the completion of IO\n\n\n\n"
 
     print(OPT)
 
@@ -145,7 +145,7 @@ def stats(fp, iosize, count):
     """ summarize the performance stats
     """
     stats = "\n[stats]\n"
-    stats += "target	  : %s\n"
+    stats += "target      : %s\n"
     stats += "block size  : %d\n"
     stats += "write count : %d\n"
     stats += "read count  : %d\n"
@@ -163,27 +163,27 @@ def convert_size(rawsize):
     """
     sm = re.search('^(\d+)(\w{1,2})?', str(rawsize))
     if sm:
-	number = sm.group(1)
-	if sm.group(2):
-	    unit = sm.group(2)
-	    if unit.upper() == 'B':
-		return int(number)
-	    elif unit.upper() == 'K' or unit.upper() == 'KB':
-		return int(number) * 1024
-	    elif unit.upper() == 'M' or unit.upper() == 'MB':
-		return int(number) * 1024 ** 2
-	    elif unit.upper() == 'G' or unit.upper() == 'GB':
-		return int(number) * 1024 ** 3
-	    elif unit.upper() == 'T' or unit.upper() == 'TB':
-		return int(number) * 1024 ** 4
-	    elif unit.upper() == 'P' or unit.upper() == 'PB':
-		return int(number) * 1024 ** 5
-	    else:
-		sys.exit("ERR: Invalid unit: %s" % unit)
-	else:
-	    return int(number)
+        number = sm.group(1)
+        if sm.group(2):
+            unit = sm.group(2)
+            if unit.upper() == 'B':
+                return int(number)
+            elif unit.upper() == 'K' or unit.upper() == 'KB':
+                return int(number) * 1024
+            elif unit.upper() == 'M' or unit.upper() == 'MB':
+                return int(number) * 1024 ** 2
+            elif unit.upper() == 'G' or unit.upper() == 'GB':
+                return int(number) * 1024 ** 3
+            elif unit.upper() == 'T' or unit.upper() == 'TB':
+                return int(number) * 1024 ** 4
+            elif unit.upper() == 'P' or unit.upper() == 'PB':
+                return int(number) * 1024 ** 5
+            else:
+                sys.exit("ERR: Invalid unit: %s" % unit)
+        else:
+            return int(number)
     else:
-	return rawsize
+        return rawsize
 
 
 def posix_lock(fd, mode, offset, length, data):
@@ -191,31 +191,31 @@ def posix_lock(fd, mode, offset, length, data):
     """
     global glocks
     lockdata = struct.pack('hhllhh', LOCK_MODES[mode][1], \
-	    0, offset, length, 0, 0)
+            0, offset, length, 0, 0)
     try:
-	if data:
-	    if mode == 'exclusive_io' or mode == 'exclusive_blk_io':
-		rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
-		# truncate extra content which exceeds end offest
-		fh.write(data)
-	    elif mode == 'shared' or mode == 'unlock':
-		# NOTE
-		# the minimal size of kernel read is one page (4KB)
-		# hence the read may failed if target bytes
-		# which page was overlappped on other byte(s)
-		# owned by other lockowners
-		readdata = fh.read(len(self._data))
-		if readdata != data:
-		    print("ERR: DMC! expect: %s | actual: %s" % (data, readdata))
-		    sys.exit(-1)
-		rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
-	    else:
-		rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
+        if data:
+            if mode == 'exclusive_io' or mode == 'exclusive_blk_io':
+                rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
+                # truncate extra content which exceeds end offest
+                fh.write(data)
+            elif mode == 'shared' or mode == 'unlock':
+                # NOTE
+                # the minimal size of kernel read is one page (4KB)
+                # hence the read may failed if target bytes
+                # which page was overlappped on other byte(s)
+                # owned by other lockowners
+                readdata = fh.read(len(self._data))
+                if readdata != data:
+                    print("ERR: DMC! expect: %s | actual: %s" % (data, readdata))
+                    sys.exit(-1)
+                rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
+            else:
+                rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
     except IOError as e:
-	exit("[err]: failed to lock %s" % str(e))
+        exit("[err]: failed to lock %s" % str(e))
 
     if mode == 'unlock':
-	return
+        return
     glocks.append((offset, length))
 
 
@@ -223,13 +223,13 @@ def patterns(pattern):
     """ return requested io pattern
     """
     if pattern == 'one':
-	return '\xff'
+        return '\xff'
     elif pattern == 'zero':
-	return '\x00'
+        return '\x00'
     elif pattern == 'rand' or pattern == 'random':
-	return 'TBD'
+        return 'TBD'
     else:
-	return pattern
+        return pattern
 
 
 def post(fd, hold):
@@ -238,8 +238,8 @@ def post(fd, hold):
     print("I/O completed, holding for %d seconds" % hold)
     time.sleep(hold)
     for lck in glocks:
-	posix_lock(fd, 'unlock', lck[0], lck[1], None)
-	#print("dbg: unlock [offset=%d, len=%d]" % (lck[0], lck[1]))
+        posix_lock(fd, 'unlock', lck[0], lck[1], None)
+        #print("dbg: unlock [offset=%d, len=%d]" % (lck[0], lck[1]))
     os.close(fd)
 
 
@@ -247,8 +247,8 @@ if __name__ == '__main__':
     """ main test
     """
     if len(sys.argv) == 1:
-	usage()
-	sys.exit(-1)
+        usage()
+        sys.exit(-1)
     # set default
     fp = None
     iosize = 512
@@ -263,66 +263,66 @@ if __name__ == '__main__':
     direct = 1
    
     try:
-	opts, args = getopt.getopt(
-		sys.argv[1:], 
-		'h:', [
-			  'help',
-			  'path=', 
-			  'rw=',
-			  'iosize=',
-			  'blocksize=',
-			  'bs=',
-			  'pattern=',
-			  'count=', 
-			  'wait=', 
-			  'hold=', 
-			  'lock=', 
-			  'skip=', 
-			  'step=', 
-			  'direct=']
-	)
+        opts, args = getopt.getopt(
+                sys.argv[1:], 
+                'h:', [
+                          'help',
+                          'path=', 
+                          'rw=',
+                          'iosize=',
+                          'blocksize=',
+                          'bs=',
+                          'pattern=',
+                          'count=', 
+                          'wait=', 
+                          'hold=', 
+                          'lock=', 
+                          'skip=', 
+                          'step=', 
+                          'direct=']
+        )
 
     except getopt.GetoptError as e:
-	# print help information and exit:
-	sys.exit("Parameter Error: %s" % str(e))
+        # print help information and exit:
+        sys.exit("Parameter Error: %s" % str(e))
 
     for o, a in opts:
-	if o in ('--path'):
-	    fp = a  
-	elif o in ('--rw'):
-	    if a in ('write', 'w', 'create', 'c', 'read', 'r'):
-		rw = a
-	    else:
-		exit("[arg err]: invalid value for --rw, " \
-			+ "please use one from ['write', 'w', 'create', 'c', 'read', 'r']")
-	elif o in ('--iosize', '--blocksize', '--bs'):
-	    iosize=convert_size(a)
-	elif o in ('--pattern'):
-	    iopattern = patterns(a)
-	elif o in ('--count'):
-	    iocount = int(a)
-	elif o in ('--wait'):
-	    wait = int(a)
-	elif o in ('--hold'):
-	    hold = int(a)
-	elif o in ('--lock'):
-	    if a in ('exclusive', 'shared', 'unlock'):
-		lock = a
-	    else:
-		exit("[arg err]: invalid value for --lock, " \
-			+ "please use one from ['exclusive', 'shared', 'unlock']")
-	elif o in ('--skip'):
-	    skip = convert_size(a)
-	elif o in ('--step'):
-	    step = convert_size(a)
-	elif o in ('--direct'):
-	    if a in ('1', '0'):
-		direct = int(a)
-	    else:
-		exit("[arg err]: invalid value for --direct, " \
-			+ "please use one from ['1', '0']")
-	else:
-	    assert False, usage()
+        if o in ('--path'):
+            fp = a  
+        elif o in ('--rw'):
+            if a in ('write', 'w', 'create', 'c', 'read', 'r'):
+                rw = a
+            else:
+                exit("[arg err]: invalid value for --rw, " \
+                        + "please use one from ['write', 'w', 'create', 'c', 'read', 'r']")
+        elif o in ('--iosize', '--blocksize', '--bs'):
+            iosize=convert_size(a)
+        elif o in ('--pattern'):
+            iopattern = patterns(a)
+        elif o in ('--count'):
+            iocount = int(a)
+        elif o in ('--wait'):
+            wait = int(a)
+        elif o in ('--hold'):
+            hold = int(a)
+        elif o in ('--lock'):
+            if a in ('exclusive', 'shared', 'unlock'):
+                lock = a
+            else:
+                exit("[arg err]: invalid value for --lock, " \
+                        + "please use one from ['exclusive', 'shared', 'unlock']")
+        elif o in ('--skip'):
+            skip = convert_size(a)
+        elif o in ('--step'):
+            step = convert_size(a)
+        elif o in ('--direct'):
+            if a in ('1', '0'):
+                direct = int(a)
+            else:
+                exit("[arg err]: invalid value for --direct, " \
+                        + "please use one from ['1', '0']")
+        else:
+            assert False, usage()
 
     post(do_io(fp, rw, iopattern, iosize, iocount, skip, step, direct, lock, wait), hold)
     stats(fp, iosize, iocount)
