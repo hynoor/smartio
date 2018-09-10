@@ -24,22 +24,18 @@ if platform == 'posix':
     import struct
     # mode : (open_mode, lock_type, operation_type)
     LOCK_MODES = {
-        'exclusive'        : ('r+b', fcntl.F_WRLCK, fcntl.F_SETLK),
-        'exclusive_io'     : ('r+b', fcntl.F_WRLCK, fcntl.F_SETLK),
-        'exclusive_blk'    : ('r+b', fcntl.F_WRLCK, fcntl.F_SETLKW),
-        'exclusive_blk_io' : ('r+b', fcntl.F_WRLCK, fcntl.F_SETLKW),
-        'shared'           : ('r+b', fcntl.F_RDLCK, fcntl.F_SETLK),
-        'unlock'           : ('r+b', fcntl.F_UNLCK, fcntl.F_SETLK),
+        'exclusive'        : (fcntl.F_WRLCK, fcntl.F_SETLK),
+        'exclusive_blk'    : (fcntl.F_WRLCK, fcntl.F_SETLKW),
+        'shared'           : (fcntl.F_RDLCK, fcntl.F_SETLK),
+        'unlock'           : (fcntl.F_UNLCK, fcntl.F_SETLK),
     }
 elif platform == 'nt':
     import msvcrt
     LOCK_MODES = {
-        'exclusive'        : ('r+b', msvcrt.LK_NBLCK),
-        'exclusive_io'     : ('r+b', msvcrt.LK_NBLCK),
-        'exclusive_blk'    : ('r+b', msvcrt.LK_LOCK),
-        'exclusive_blk_io' : ('r+b', msvcrt.LK_LOCK),
-        'shared'           : ('r+b', msvcrt.LK_NBRLCK),
-        'unlock'           : ('r+b', msvcrt.LK_UNLCK),
+        'exclusive'        : (msvcrt.LK_NBLCK),
+        'exclusive_blk'    : (msvcrt.LK_LOCK),
+        'shared'           : (msvcrt.LK_NBRLCK),
+        'unlock'           : (msvcrt.LK_UNLCK),
     }
 else:
     sys.exit("Unsupported Platform!")
@@ -78,7 +74,7 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait
         openmode |= os.O_CREAT
     if direct == 1:
         openmode |= os.O_DIRECT
-
+    # exclusive lock requires RDWR-ed fd
     if lock in ['exclusive']:
         openmode |= os.O_RDWR 
 
@@ -130,7 +126,7 @@ def nt_lock(offset, length, mode):
 
 
 def usage():
-    print("SmartIO - A smart, lite IO tool")
+    print("\nsmartio - a smart and lite file protocol probing tool\n")
     print("smartio.py <OPTIONS>")
     OPT = "\n"
     OPT += "OPTIONs:\n\n"
@@ -198,12 +194,12 @@ def posix_lock(fd, mode, offset, length, data):
     """ posix locks
     """
     global glocks
-    lockdata = struct.pack('hhllhh', LOCK_MODES[mode][1], \
+    lockdata = struct.pack('hhllhh', LOCK_MODES[mode][0], \
             0, offset, length, 0, 0)
     try:
         if data:
             if mode == 'exclusive_io' or mode == 'exclusive_blk_io':
-                rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
+                rv = fcntl.fcntl(fd, LOCK_MODES[mode][1], lockdata)
                 # truncate extra content which exceeds end offest
                 fh.write(data)
             elif mode == 'shared' or mode == 'unlock':
@@ -217,9 +213,9 @@ def posix_lock(fd, mode, offset, length, data):
                     logger.error("ERR: DMC! expect: %s | actual: %s" % (data, readdata))
                     if stoponerr:
                         sys.exit(-1)
-                rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
+                rv = fcntl.fcntl(fd, LOCK_MODES[mode][1], lockdata)
             else:
-                rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
+                rv = fcntl.fcntl(fd, LOCK_MODES[mode][1], lockdata)
     except IOError as e:
         logger.err("failed to lock %s" % str(e))
         if stoponerr:
@@ -257,6 +253,19 @@ def post(fd, hold):
             if stoponerr:
                 exit(-1)
     os.close(fd)
+
+
+def deleg():
+    """ validates if delegation bestowed
+    """
+    return
+
+
+def deleg_retrun():
+    """ validate if delegation recalled
+    """
+    return
+
 
 
 if __name__ == '__main__':
@@ -327,11 +336,11 @@ if __name__ == '__main__':
         elif o in ('--hold'):
             hold = int(a)
         elif o in ('--lock'):
-            if a in ('exclusive', 'shared', 'unlock'):
+            if a in ('exclusive', 'exclusive_blk', 'shared', 'unlock'):
                 lock = a
             else:
                 exit("[arg err]: invalid value for --lock, " \
-                        + "please use one from ['exclusive', 'shared', 'unlock']")
+                        + "please choose one from exclusive|exclusive_blk|shared|unlock")
         elif o in ('--skip'):
             skip = convert_size(a)
         elif o in ('--step'):
