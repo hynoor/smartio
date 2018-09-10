@@ -96,7 +96,7 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait
     for idx, pos in enumerate(xrange(skip, stop, step), 1):
 	os.lseek(fd, pos, os.SEEK_SET)
 	try:
-	    if rw in ['write', 'w', 'create', 'c']:
+            if rw in ['write', 'w', 'create', 'c']:
 		do_lock(fd, lock, pos, io_size, None)
 		os.write(fd, buf)
 		gwritecnt += 1
@@ -196,17 +196,17 @@ def posix_lock(fd, mode, offset, length, data):
 	if data:
             if mode == 'exclusive_io' or mode == 'exclusive_blk_io':
                 rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
-	        # truncate extra content which exceeds end offest
-	        fh.write(data)
+		# truncate extra content which exceeds end offest
+		fh.write(data)
             elif mode == 'shared' or mode == 'unlock':
-	        # NOTE
-	        # the minimal size of kernel read is one page (4KB)
-	        # hence the read may failed if target bytes
-	        # which page was overlappped on other byte(s)
-	        # owned by other lockowners
-	        readdata = fh.read(len(self._data))
-	        if readdata != data:
-	            print("ERR: DMC! expect: %s | actual: %s" % (data, readdata))
+		# NOTE
+		# the minimal size of kernel read is one page (4KB)
+		# hence the read may failed if target bytes
+		# which page was overlappped on other byte(s)
+		# owned by other lockowners
+		readdata = fh.read(len(self._data))
+		if readdata != data:
+		    print("ERR: DMC! expect: %s | actual: %s" % (data, readdata))
 		    sys.exit(-1)
 		rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
 	    else:
