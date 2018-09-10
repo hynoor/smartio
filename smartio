@@ -6,12 +6,18 @@ import time
 import mmap
 import re
 import getopt
+import logging
 
 gspent = 0
 glocks = []
 greadcnt = 0
 gwritecnt = 0
 platform = os.name
+
+FORMAT = '%(asctime)-15s %(message)s'
+logging.basicConfig(format=FORMAT)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 if platform == 'posix':
     import fcntl
@@ -50,7 +56,8 @@ def timeit(method):
             name = kw.get('log_name', method.__name__.upper())
             kw['log_time'][name] = int(gspent)
         else:
-            print '%r  %2.2f ms' % (method.__name__, gspent)
+            #logger.debug("%r  %2.2f ms' % (method.__name__, gspent))
+            pass
         return result
 
     return timed
@@ -92,7 +99,7 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait
         exit("[err]: open failed, %s" % str(e))
     stop = skip + (io_size + step) * count
     step += io_size
-    print("dbg: [%d, %d %d]" %(skip, stop, step))
+    logger.debug("[%d, %d %d]" %(skip, stop, step))
     for idx, pos in enumerate(xrange(skip, stop, step), 1):
         os.lseek(fd, pos, os.SEEK_SET)
         try:
@@ -107,10 +114,10 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait
             elif rw == 'noop':
                 do_lock(fd, lock, pos, io_size, None)
                 pass
-            print("dbg: %s #%d (offset=%d, len=%d)" % (rw,idx, pos, io_size))
+            logger.debug("%s #%d (offset=%d, len=%d)" % (rw,idx, pos, io_size))
             time.sleep(wait)
         except IOError as e:
-            print("IO Eorr [offset=%d, len=%d]  failed  with error: %s" % (pos, io_size, str(e)))
+            logger.error("IO Eorr [offset=%d, len=%d]  failed  with error: %s" % (pos, io_size, str(e)))
             os.close(fd)
 
     return fd
@@ -152,7 +159,7 @@ def stats(fp, iosize, count):
     stats += "total size  : %d\n"
     stats += "lock count  : %d\n"
     stats += "io duration : %2.2f ms\n"
-    print(stats % (fp, iosize, gwritecnt, greadcnt, iosize*count, len(glocks), gspent))
+    logger.info(stats % (fp, iosize, gwritecnt, greadcnt, iosize*count, len(glocks), gspent))
 
 
 
@@ -206,7 +213,7 @@ def posix_lock(fd, mode, offset, length, data):
                 # owned by other lockowners
                 readdata = fh.read(len(self._data))
                 if readdata != data:
-                    print("ERR: DMC! expect: %s | actual: %s" % (data, readdata))
+                    logger.error("ERR: DMC! expect: %s | actual: %s" % (data, readdata))
                     sys.exit(-1)
                 rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
             else:
@@ -235,11 +242,11 @@ def patterns(pattern):
 def post(fd, hold):
     """ cleanup after hold
     """
-    print("I/O completed, holding for %d seconds" % hold)
+    logger.info("I/O completed, holding for %d seconds" % hold)
     time.sleep(hold)
     for lck in glocks:
         posix_lock(fd, 'unlock', lck[0], lck[1], None)
-        #print("dbg: unlock [offset=%d, len=%d]" % (lck[0], lck[1]))
+        logger.debug("unlock [offset=%d, len=%d]" % (lck[0], lck[1]))
     os.close(fd)
 
 
@@ -261,6 +268,7 @@ if __name__ == '__main__':
     skip = 0
     lock= 'noop'
     direct = 1
+    debug = 0
    
     try:
         opts, args = getopt.getopt(
@@ -279,7 +287,9 @@ if __name__ == '__main__':
                           'lock=', 
                           'skip=', 
                           'step=', 
-                          'direct=']
+                          'direct=',
+                          'debug=',
+                          ]
         )
 
     except getopt.GetoptError as e:
@@ -315,6 +325,12 @@ if __name__ == '__main__':
             skip = convert_size(a)
         elif o in ('--step'):
             step = convert_size(a)
+        elif o in ('--debug'):
+            if a in ('1', '0'):
+                debug = int(a)
+            else:
+                exit("[arg err]: invalid value for --debug, " \
+                        + "please use one from ['1', '0']")
         elif o in ('--direct'):
             if a in ('1', '0'):
                 direct = int(a)
@@ -323,7 +339,8 @@ if __name__ == '__main__':
                         + "please use one from ['1', '0']")
         else:
             assert False, usage()
-
+    if debug:
+        logger.setLevel(logging.DEBUG)
     post(do_io(fp, rw, iopattern, iosize, iocount, skip, step, direct, lock, wait), hold)
     stats(fp, iosize, iocount)
 
