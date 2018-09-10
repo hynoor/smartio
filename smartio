@@ -9,6 +9,8 @@ import getopt
 
 gspent = 0
 glocks = []
+greadcnt = 0
+gwritecnt = 0
 platform = os.name
 
 if platform == 'posix':
@@ -57,7 +59,7 @@ def timeit(method):
 
 @timeit
 def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait):
-    if rw == 'read' or rw == 'r':
+    if rw in ['read', 'r', 'noop']:
         openmode = os.O_RDONLY
     elif rw == 'write' or rw == 'w':
         openmode = os.O_RDWR 
@@ -68,9 +70,11 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait
         openmode |= os.O_DIRECT
 
     global glocks
-    if lock:
+    global greadcnt
+    global gwritecnt
+    if lock != 'noop':
         do_lock = posix_lock
-    elif lock is None:
+    else:
         def do_lock(*args):
             pass
     if direct:
@@ -92,10 +96,12 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait
             if rw in ['write', 'w', 'create', 'c']:
                 do_lock(fd, lock, pos, io_size, None)
                 os.write(fd, buf)
+                gwritecnt += 1
             elif rw in ['read', 'r']:
                 do_lock(fd, lock, pos, io_size, None)
                 buf = os.read(fd, io_size)
-            elif rw == ['nop', None]:
+                greadcnt += 1
+            elif rw == 'noop':
                 do_lock(fd, lock, pos, io_size, None)
                 pass
             print("dbg: %s (offset=%d, len=%d)" % (rw, pos, io_size))
@@ -137,12 +143,13 @@ def stats(fp, iosize, count):
     """
     stats = "\n[stats]\n"
     stats += "target      : %s\n"
-    stats += "io size     : %d\n"
-    stats += "io count    : %d\n"
+    stats += "block size  : %d\n"
+    stats += "write count : %d\n"
+    stats += "read count  : %d\n"
     stats += "total size  : %d\n"
     stats += "lock count  : %d\n"
     stats += "io duration : %2.2f ms\n"
-    print(stats % (fp, iosize, count, iosize*count, len(glocks), gspent))
+    print(stats % (fp, iosize, gwritecnt, greadcnt, iosize*count, len(glocks), gspent))
 
 
 
@@ -225,7 +232,6 @@ def post(fd, hold):
     """
     print("I/O completed, holding for %d seconds" % hold)
     time.sleep(hold)
-    print("len of glocks: %d" % len(glocks))
     for lck in glocks:
         posix_lock(fd, 'unlock', lck[0], lck[1], None)
         #print("dbg: unlock [offset=%d, len=%d]" % (lck[0], lck[1]))
@@ -243,12 +249,12 @@ if __name__ == '__main__':
     iosize = 512
     iopattern = '0xff'
     iocount = 1
-    rw = 'read'
+    rw = 'noop'
     wait = 0
     hold = 0
     step = 0
     skip = 0
-    lock= 'shared'
+    lock= 'noop'
     direct = 1
    
     try:
