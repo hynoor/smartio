@@ -59,13 +59,15 @@ def timeit(method):
 
 @timeit
 def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait):
-    if rw in ['read', 'r', 'noop']:
+    if rw in ['read', 'r', 'noop'] and lock in ['shared', 'noop']:
         openmode = os.O_RDONLY
     elif rw == 'write' or rw == 'w':
         openmode = os.O_RDWR 
     elif rw == 'create' or rw == 'c':
         openmode = os.O_RDWR 
         openmode |= os.O_CREAT
+    elif lock in ['exclusive']:
+        openmode = os.O_RDWR 
     if direct == 1:
         openmode |= os.O_DIRECT
 
