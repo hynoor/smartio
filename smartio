@@ -96,7 +96,7 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait
     for idx, pos in enumerate(xrange(skip, stop, step), 1):
 	os.lseek(fd, pos, os.SEEK_SET)
 	try:
-            if rw in ['write', 'w', 'create', 'c']:
+	    if rw in ['write', 'w', 'create', 'c']:
 		do_lock(fd, lock, pos, io_size, None)
 		os.write(fd, buf)
 		gwritecnt += 1
@@ -194,11 +194,11 @@ def posix_lock(fd, mode, offset, length, data):
 	    0, offset, length, 0, 0)
     try:
 	if data:
-            if mode == 'exclusive_io' or mode == 'exclusive_blk_io':
-                rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
+	    if mode == 'exclusive_io' or mode == 'exclusive_blk_io':
+		rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
 		# truncate extra content which exceeds end offest
 		fh.write(data)
-            elif mode == 'shared' or mode == 'unlock':
+	    elif mode == 'shared' or mode == 'unlock':
 		# NOTE
 		# the minimal size of kernel read is one page (4KB)
 		# hence the read may failed if target bytes
@@ -212,7 +212,7 @@ def posix_lock(fd, mode, offset, length, data):
 	    else:
 		rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
     except IOError as e:
-        exit("[err]: failed to lock %s" % str(e))
+	exit("[err]: failed to lock %s" % str(e))
 
     if mode == 'unlock':
 	return
