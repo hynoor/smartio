@@ -1,4 +1,4 @@
-#! python sdd.py
+#! python smartio
 
 import os
 import sys
@@ -6,8 +6,6 @@ import time
 import mmap
 import re
 import getopt
-
-import pdb
 
 gspent = 0
 glocks = []
@@ -63,6 +61,8 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait
         openmode = os.O_RDONLY
     elif rw == 'write' or rw == 'w':
         openmode = os.O_RDWR 
+    elif rw == 'create' or rw == 'c':
+        openmode = os.O_RDWR 
         openmode |= os.O_CREAT
     if direct == 1:
         openmode |= os.O_DIRECT
@@ -73,34 +73,32 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait
     elif lock is None:
         def do_lock(*args):
             pass
-    pdb.set_trace()
     if direct:
         # use mmap make it page aligned
         buf = mmap.mmap(-1, io_size)
         buf.write(pattern * (io_size//len(pattern)) + pattern[:io_size%len(pattern)])
     else:
         buf = pattern * (io_size//len(pattern)) + pattern[:io_size%len(pattern)]
-
-    fd = os.open(file_path, openmode)
+    try:
+        fd = os.open(file_path, openmode)
+    except OSError as e:
+        exit("[err]: open failed, %s" % str(e))
     stop = (io_size + step) * count
     step += io_size
     print("dbg: [%d, %d %d]" %(skip, stop, step))
     for pos in xrange(skip, stop, step):
+        os.lseek(fd, pos, os.SEEK_SET)
         try:
-            os.lseek(fd, pos, os.SEEK_CUR)
-            if rw == 'write' or rw == 'w':
+            if rw in ['write', 'w', 'create', 'c']:
                 do_lock(fd, lock, pos, io_size, None)
-                glocks.append((pos, io_size))
                 os.write(fd, buf)
-            elif rw == 'read' or rw == 'r':
+            elif rw in ['read', 'r']:
                 do_lock(fd, lock, pos, io_size, None)
-                glocks.append((pos, io_size))
                 buf = os.read(fd, io_size)
-            elif rw == 'noop' or rw is None:
+            elif rw == ['nop', None]:
                 do_lock(fd, lock, pos, io_size, None)
-                glocks.append((pos, io_size))
                 pass
-            #print("dbg: %s (offset=%d, len=%d)" % (rw, pos, io_size))
+            print("dbg: %s (offset=%d, len=%d)" % (rw, pos, io_size))
             time.sleep(wait)
         except IOError as e:
             print("IO Eorr [offset=%d, len=%d]  failed  with error: %s" % (pos, io_size, str(e)))
@@ -142,8 +140,9 @@ def stats(fp, iosize, count):
     stats += "io size     : %d\n"
     stats += "io count    : %d\n"
     stats += "total size  : %d\n"
+    stats += "lock count  : %d\n"
     stats += "io duration : %2.2f ms\n"
-    print(stats % (fp, iosize, count, iosize*count, gspent))
+    print(stats % (fp, iosize, count, iosize*count, len(glocks), gspent))
 
 
 
@@ -180,13 +179,13 @@ def convert_size(rawsize):
 def posix_lock(fd, mode, offset, length, data):
     """ posix locks
     """
+    global glocks
     lockdata = struct.pack('hhllhh', LOCK_MODES[mode][1], \
             0, offset, length, 0, 0)
 
     if data:
         if mode == 'exclusive_io' or mode == 'exclusive_blk_io':
             rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
-            os.lseek(fd, offset, os.SEEK_CUR)
             # truncate extra content which exceeds end offest
             fh.write(data)
         elif mode == 'shared' or mode == 'unlock':
@@ -195,7 +194,6 @@ def posix_lock(fd, mode, offset, length, data):
             # hence the read may failed if target bytes
             # which page was overlappped on other byte(s)
             # owned by other lockowners
-            fh.seek(offset)
             readdata = fh.read(len(self._data))
             if readdata != data:
                 print("ERR: DMC! expect: %s | actual: %s" % (data, readdata))
@@ -203,6 +201,10 @@ def posix_lock(fd, mode, offset, length, data):
         rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
     else:
         rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
+
+    if mode == 'unlock':
+        return
+    glocks.append((offset, length))
 
 
 def patterns(pattern):
@@ -223,6 +225,7 @@ def post(fd, hold):
     """
     print("I/O completed, holding for %d seconds" % hold)
     time.sleep(hold)
+    print("len of glocks: %d" % len(glocks))
     for lck in glocks:
         posix_lock(fd, 'unlock', lck[0], lck[1], None)
         #print("dbg: unlock [offset=%d, len=%d]" % (lck[0], lck[1]))
@@ -238,7 +241,7 @@ if __name__ == '__main__':
     # set default
     fp = None
     iosize = 512
-    iopattern = None
+    iopattern = '0xff'
     iocount = 1
     rw = 'read'
     wait = 0
@@ -276,13 +279,15 @@ if __name__ == '__main__':
         if o in ('--path'):
             fp = a  
         elif o in ('--rw'):
-            rw = a
+            if a in ('write', 'w', 'create', 'c', 'read', 'r'):
+                rw = a
+            else:
+                exit("[arg err]: invalid value for --rw, " \
+                        + "please use one from ['write', 'w', 'create', 'c', 'read', 'r']")
         elif o in ('--iosize', '--blocksize', '--bs'):
             iosize=convert_size(a)
         elif o in ('--pattern'):
             iopattern = patterns(a)
-        elif o in ('--rw'):
-            rw = a
         elif o in ('--count'):
             iocount = int(a)
         elif o in ('--wait'):
@@ -290,13 +295,21 @@ if __name__ == '__main__':
         elif o in ('--hold'):
             hold = int(a)
         elif o in ('--lock'):
-            lock = a
+            if a in ('exclusive', 'shared', 'unlock'):
+                lock = a
+            else:
+                exit("[arg err]: invalid value for --lock, " \
+                        + "please use one from ['exclusive', 'shared', 'unlock']")
         elif o in ('--skip'):
             skip = convert_size(a)
         elif o in ('--step'):
             step = convert_size(a)
         elif o in ('--direct'):
-            direct = int(a)
+            if a in ('1', '0'):
+                direct = int(a)
+            else:
+                exit("[arg err]: invalid value for --direct, " \
+                        + "please use one from ['1', '0']")
         else:
             assert False, usage()
 
