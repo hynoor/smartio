@@ -89,10 +89,10 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait
         fd = os.open(file_path, openmode)
     except OSError as e:
         exit("[err]: open failed, %s" % str(e))
-    stop = (io_size + step) * count
+    stop = skip + (io_size + step) * count
     step += io_size
     print("dbg: [%d, %d %d]" %(skip, stop, step))
-    for pos in xrange(skip, stop, step):
+    for idx, pos in enumerate(xrange(skip, stop, step), 1):
         os.lseek(fd, pos, os.SEEK_SET)
         try:
             if rw in ['write', 'w', 'create', 'c']:
@@ -106,7 +106,7 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait
             elif rw == 'noop':
                 do_lock(fd, lock, pos, io_size, None)
                 pass
-            print("dbg: %s (offset=%d, len=%d)" % (rw, pos, io_size))
+            print("dbg: %s #%d (offset=%d, len=%d)" % (rw,idx, pos, io_size))
             time.sleep(wait)
         except IOError as e:
             print("IO Eorr [offset=%d, len=%d]  failed  with error: %s" % (pos, io_size, str(e)))
