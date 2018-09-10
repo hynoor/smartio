@@ -219,7 +219,8 @@ def posix_lock(fd, mode, offset, length, data):
             else:
                 rv = fcntl.fcntl(fd, LOCK_MODES[mode][2], lockdata)
     except IOError as e:
-        exit("[err]: failed to lock %s" % str(e))
+        logger.err("failed to lock %s" % str(e))
+        exit(-1)
 
     if mode == 'unlock':
         return
