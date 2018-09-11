@@ -79,6 +79,7 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait
         openmode |= os.O_RDWR 
 
     if lock != 'noop':
+        logger.debug("dbg: lock func is assigned")
         do_lock = posix_lock
     else:
         def do_lock(*args):
@@ -94,7 +95,7 @@ def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait
     except OSError as e:
         exit("[err]: open failed, %s" % str(e))
     stop = skip + (io_size + step) * count
-    step += io_size
+    step += io_size 
     logger.debug("[%d, %d %d]" %(skip, stop, step))
     for idx, pos in enumerate(xrange(skip, stop, step), 1):
         os.lseek(fd, pos, os.SEEK_SET)
@@ -130,10 +131,11 @@ def usage():
     print("smartio.py <OPTIONS>")
     OPT = "\n"
     OPT += "OPTIONs:\n\n"
-    OPT += "    --path       : Target file/block to be manipulated\n"
-    OPT += "    --rw         : Write or read, accepts values: create|c|write|w|read|r \n"
+    OPT += "    --path       : Target file or device to be IOed\n"
+    OPT += "    --rw         : Write(create) or read, accepts values: create|c|write|w|read|r \n"
     OPT += "    --iosize     : Size of each IO to be performed\n"
-    OPT += "    --count      : Number of IO to be performed\n"
+    OPT += "    --blocksize  : The same as --iosize\n"
+    OPT += "    --count      : Number of IO to be issued\n"
     OPT += "    --skip       : The starting offset\n"
     OPT += "    --step       : The offset interval between each IO\n"
     OPT += "    --direct     : Indicate if use direct IO, accepts 0|1 \n"
@@ -201,6 +203,8 @@ def posix_lock(fd, mode, offset, length, data):
             if mode == 'exclusive_io' or mode == 'exclusive_blk_io':
                 rv = fcntl.fcntl(fd, LOCK_MODES[mode][1], lockdata)
                 # truncate extra content which exceeds end offest
+                logger.debug("dbg: range lock [mode=%s, offset=%d, len=%d] was created"\
+                        % (mode, offset, length))
                 fh.write(data)
             elif mode == 'shared' or mode == 'unlock':
                 # NOTE
@@ -214,8 +218,12 @@ def posix_lock(fd, mode, offset, length, data):
                     if stoponerr:
                         sys.exit(-1)
                 rv = fcntl.fcntl(fd, LOCK_MODES[mode][1], lockdata)
-            else:
-                rv = fcntl.fcntl(fd, LOCK_MODES[mode][1], lockdata)
+                logger.debug("dbg: range lock [mode=%s, offset=%d, len=%d] was created"\
+                        % (mode, offset, length))
+        else:
+            rv = fcntl.fcntl(fd, LOCK_MODES[mode][1], lockdata)
+            logger.debug("dbg: range lock [mode=%s, offset=%d, len=%d] was created"\
+                    % (mode, offset, length))
     except IOError as e:
         logger.err("failed to lock %s" % str(e))
         if stoponerr:
@@ -242,14 +250,14 @@ def patterns(pattern):
 def post(fd, hold):
     """ cleanup after hold
     """
-    logger.info("I/O completed, holding for %d seconds" % hold)
+    logger.info("info: I/O completed, holding for %d seconds" % hold)
     time.sleep(hold)
     for lck in glocks:
         try:
             posix_lock(fd, 'unlock', lck[0], lck[1], None)
-            logger.debug("unlock [offset=%d, len=%d]" % (lck[0], lck[1]))
+            logger.debug("dbg: unlock [offset=%d, len=%d]" % (lck[0], lck[1]))
         except IOError as e:
-            logger.error("unlock fail [offset=%d, len=%d]" % (lck[0], lck[1])) 
+            logger.error("err: unlock fail [offset=%d, len=%d]" % (lck[0], lck[1])) 
             if stoponerr:
                 exit(-1)
     os.close(fd)
@@ -336,7 +344,7 @@ if __name__ == '__main__':
         elif o in ('--hold'):
             hold = int(a)
         elif o in ('--lock'):
-            if a in ('exclusive', 'exclusive_blk', 'shared', 'unlock'):
+            if a in ('exclusive', 'exclusive_blk', 'shared', 'unlock', 'noop'):
                 lock = a
             else:
                 exit("[arg err]: invalid value for --lock, " \
