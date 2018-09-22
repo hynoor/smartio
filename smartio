@@ -5,149 +5,370 @@ import sys
 import time
 import mmap
 import re
+import pdb
 import getopt
 import logging
+import pyshark 
+import thread
+from multiprocessing import Process
 
 gspent = 0
 glocks = []
 greadcnt = 0
 gwritecnt = 0
 gerrcnt = 0
-platform = os.name
+gdolock = None
+gdebug = '0'
+gplat = os.name
 
-FORMAT = '%(asctime)-15s %(message)s'
+FORMAT = '%(asctime)-15s %(process)s %(levelname)s %(message)s'
 logging.basicConfig(format=FORMAT)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
-if platform == 'posix':
+
+if gplat == 'posix':
     import fcntl
     import struct
-    # mode : (open_mode, lock_type, operation_type)
+    # mode : (lock_type, operation_type)
     LOCK_MODES = {
-	'excl'	   : (fcntl.F_WRLCK, fcntl.F_SETLK),
-	'excl_blk'    : (fcntl.F_WRLCK, fcntl.F_SETLKW),
-	'shared'	   : (fcntl.F_RDLCK, fcntl.F_SETLK),
-	'unlock'	   : (fcntl.F_UNLCK, fcntl.F_SETLK),
+    'excl'     : (fcntl.F_WRLCK, fcntl.F_SETLK),
+    'excl_blk' : (fcntl.F_WRLCK, fcntl.F_SETLKW),
+    'shared'   : (fcntl.F_RDLCK, fcntl.F_SETLK),
+    'unlock'   : (fcntl.F_UNLCK, fcntl.F_SETLK),
     }
-elif platform == 'nt':
+elif gplat == 'nt':
     import msvcrt
     LOCK_MODES = {
-	'excl'	   : (msvcrt.LK_NBLCK),
-	'excl_blk'    : (msvcrt.LK_LOCK),
-	'shared'	   : (msvcrt.LK_NBRLCK),
-	'unlock'	   : (msvcrt.LK_UNLCK),
+    'excl'     : (msvcrt.LK_NBLCK),
+    'excl_blk' : (msvcrt.LK_LOCK),
+    'shared'   : (msvcrt.LK_NBRLCK),
+    'unlock'   : (msvcrt.LK_UNLCK),
     }
 else:
-    sys.exit("Unsupported Platform!")
+    sys.exit("Unsupported gplat!")
+
+
+NFS4_OPCODE = {
+    '3'  : 'ACCESS',          # Check Access Rights
+    '4'  : 'CLOSE',           # CLOSE File 
+    '5'  : 'COMMIT',          # Commit Cached Data
+    '6'  : 'CREATE',          # Create a Non-regualr File Object
+    '7'  : 'DELEGPURGE',      # Purge Delegations Awaiting Recovery
+    '8'  : 'DELEGRETURN',     # Return Delegation
+    '9'  : 'GETATTR',         # Get Attributes
+    '10' : 'GETFH',           # Get Current Filehandle
+    '11' : 'LINK',            # Create Link to a File
+    '12' : 'LOCK',            # Create Lock
+    '13' : 'LOCKT',           # Test for Lock
+    '14' : 'LOCKU',           # Unlock File
+    '15' : 'LOOKUP',          # Look Up Filename
+    '16' : 'LOOKKUPP',        # Look Up Parent Directory 
+    '17' : 'NVERIFY',         # Verify Difference in Attributes
+    '18' : 'OPEN',            # Open a Regular File
+    '19' : 'OPENATTR',        # Open Named Attribute Directory
+    '20' : 'OPEN_CONFIRM',    # Confirm Open
+    '21' : 'OPEN_DOWNGRADE',  # Reduce Open File Access
+    '22' : 'PUTFH',           # Set Current Filehandle
+    '23' : 'PUTPUBFH',        # Set Public Filehandle
+    '24' : 'PUTROOTFH',       # Set Root Filehandle
+    '25' : 'READ',            # Read from File
+    '26' : 'READDIR',         # Read Directory
+    '27' : 'READLINK',        # Read Symbolic Link
+    '28' : 'REMOVE',          # Remove File System Object
+    '29' : 'RENAME',          # Rename Directory Entry
+    '30' : 'RENEW',           # Renew a Lease
+    '31' : 'RESTOREFH',       # Restore Saved File handle
+    '32' : 'SAVEFH',          # Save Current Filehandle
+    '33' : 'SECINFO',         # Obtain Available Security
+    '34' : 'SETATTR',         # Set Attributes
+    '35' : 'SETCLIENTID',     # Negotiate Client ID
+    '36' : 'SETCLIENTID_CONFIRM', # Confirm Client ID
+    '37' : 'VERIFY',          # Verify Same Attributes
+    '38' : 'WRITE',           # Write to File
+    '39' : 'RELEASE_LOCKOWNER',   # Release Lock-Owner State
+
+    '10044' : 'ILLEGAL',      # Illegal Operations
+}
+
+NFS4_CB = {
+    '0' : 'CB_NULL',          # No Operation
+    1 : 'CB_COMPOUND',      # COMPOUND Operations
+    2 : 'CB_GETATTR',       # Get Attributes
+    3 : 'CB_RECALL',        # Recall an Open Dlegation
+
+    10044 : 'ILLEGAL',      # Illegal Callback Operations
+}
+
+NFS4_ERR = {
+    '0'     : 'NFS4_OK',      
+    '13'    : 'NFS4ERR_ACCESS',          
+    '10047' : 'NFS4ERR_ADMIN_REVOKED',          
+    '10032' : 'NFS4ERR_ATTRNOTSUPP',          
+    '10040' : 'NFS4ERR_BADCHAR',
+    '10001' : 'NFS4ERR_BADHANDLE',
+    '10041' : 'NFS4ERR_BADNAME',
+    '10039' : 'NFS4ERR_BADOWNER',
+    '10007' : 'NFS4ERR_BADTYPE',
+    '10036' : 'NFS4ERR_BADXDR',
+    '10003' : 'NFS4ERR_BAD_COOKIE',
+    '10042' : 'NFS4ERR_BAD_RANGE',
+    '10026' : 'NFS4ERR_BAD_SEQID',
+    '10025' : 'NFS4ERR_BAD_STATEID',
+    '10048' : 'NFS4ERR_CB_PATH_DOWN',
+    '10017' : 'NFS4ERR_CLID_INUSE',
+    '10045' : 'NFS4ERR_DEADLOCK',
+    '10008' : 'NFS4ERR_DELAY',
+    '10010' : 'NFS4ERR_DENIED',
+    '69'    : 'NFS4ERR_DQUOT',
+    '17'    : 'NFS4ERR_EXIST',
+    '10011' : 'NFS4ERR_EXPIRED',
+    '27'    : 'NFS4ERR_FBIG',
+    '10014' : 'NFS4ERR_FHEXPIRED',
+    '10046' : 'NFS4ERR_FILE_OPEN',
+    '10013' : 'NFS4ERR_GRACE',
+    '22'    : 'NFS4ERR_INVAL',
+    '5'     : 'NFS4ERR_IO',
+    '21'    : 'NFS4ERR_ISDIR',
+    '10031' : 'NFS4ERR_LEASE_MOVED',
+    '10012' : 'NFS4ERR_LOCKED',
+    '10037' : 'NFS4ERR_LOCKS_HELD',
+    '10043' : 'NFS4ERR_LOCKS_NOT_SUPP',
+    '10028' : 'NFS4ERR_LOCK_RANGE',
+    '10021' : 'NFS4ERR_MINOR_VERS_MISMATCH',
+    '31   ' : 'NFS4ERR_MLIN',
+    '10019' : 'NFS4ERR_MOVED',
+    '63'    : 'NFS4ERR_NAMETOOLONG',
+    '2'     : 'NFS4ERR_NOENT',
+    '10020' : 'NFS4ERR_NOFILEHANDLE',
+    '28'    : 'NFS4ERR_NOSPC',
+    '20'    : 'NFS4ERR_NOTDIR',
+    '66'    : 'NFS4ERR_NOTEMPTY',
+    '10004' : 'NFS4ERR_NOTSUPP',
+    '10027' : 'NFS4ERR_NOT_SAME',
+    '10033' : 'NFS4ERR_NO_GRACE',
+    '6'     : 'NFS4ERR_NXIO',
+    '10024' : 'NFS4ERR_OLD_STATEID',
+    '10038' : 'NFS4ERR_OPENMODE',
+    '10044' : 'NFS4ERR_OP_ILLEGAL',
+    '1'     : 'NFS4ERR_PERM',
+    '10034' : 'NFS4ERR_RECLAIM_BAD',
+    '10035' : 'NFS4ERR_RECLAIM_CONFLICT',
+    '10018' : 'NFS4ERR_RESOURCE',
+    '10030' : 'NFS4ERR_RESTOREFH',
+    '30'    : 'NFS4ERR_ROFS',
+    '10009' : 'NFS4ERR_SAME',
+    '10006' : 'NFS4ERR_SERVERFAULT',
+    '10015' : 'NFS4ERR_SHARE_DENIED',
+    '70'    : 'NFS4ERR_STALE',
+    '10022' : 'NFS4ERR_STALE_CLIENTID',
+    '10023' : 'NFS4ERR_STALE_STATEID',
+    '10029' : 'NFS4ERR_SYMLINK',
+    '10005' : 'NFS4ERR_TOOSMALL',
+    '10016' : 'NFS4ERR_WRONGSEC',
+    '18'    : 'NFS4ERR_XDEV',
+}
+
+
+def get_server(path):
+    """ get server ip through passed target path:
+    """
+    mnts = {}
+    for line in file('/proc/mounts'):
+        if re.findall(r'^[0-9]+(?:\.[0-9]+){3}', line):
+            line = line.split()
+            mnts[line[1]] = line[0]
+   
+
+    # check if passed path resides on a mounted path
+    path = os.path.abspath(path)
+    while not os.path.ismount(path):
+        path = os.path.dirname(path)
+     
+    if path in mnts.keys():
+        return re.findall(r'[0-9]+(?:\.[0-9]+){3}', mnts[path])[0]
+    else:
+        logger.warning("warn: target path is not a remote file")
+
+
+def do_sniff(eth, ip, port, time=10):
+    """ start sniff 
+    """ 
+    bpffilter = 'host ' + ip + ' and ip and tcp ' + 'port '+ str(port)
+    logger.info("cap: tshark filter on inferface %s: %s" % (eth, bpffilter))
+    cap = pyshark.LiveCapture(interface=eth, bpf_filter=bpffilter)
+    logger.info("cap: start sniff for %d seconds" % time)
+    cap.sniff(timeout=time)
+    logger.info("cap: nfs pakets captured: %d" % len(cap))
+
+    return cap
+
+
+def dissect(cap, server, verbose=False):
+    """ dissect the caputured packages
+    """
+    output = []
+    recv = cap[:]
+    nfs = ((pkt) for pkt in recv if hasattr(pkt, 'nfs'))
+    if not verbose:
+        for idx, pkt in enumerate(nfs, 1):
+            src = pkt.ip.src
+            dst = pkt.ip.dst
+            time = pkt.sniff_timestamp
+            offset = ''
+            length = ''
+            if dst == server:  # reuqest
+                mainop = NFS4_OPCODE[vars(pkt.nfs)['_all_fields']['nfs.main_opcode']]
+                # we need to understand details of certain operations
+                if mainop in ['LOCK', 'LOCKU']: 
+                    offset = vars(pkt.nfs)['_all_fields']['nfs.offset4']
+                    length = vars(pkt.nfs)['_all_fields']['nfs.length4']
+                    output.append("#%-4s %s len=%-4s %-14s --> %-14s %-8s [off=%s len=%s]" \
+                    % (idx, time, pkt.length, src, dst, mainop, offset, length))
+                elif mainop in ['READ']:
+                    offset = vars(pkt.nfs)['_all_fields']['nfs.offset4']
+                    count = vars(pkt.nfs)['_all_fields']['nfs.count4']
+                    output.append("#%-4s %s len=%-4s %-14s --> %-14s %-8s [off=%s cnt=%s]" \
+                    % (idx, time, pkt.length, src, dst, mainop, offset, count))
+                else:
+                    output.append("#%-4s %s len=%-4s %-14s --> %-14s %-8s" \
+                    % (idx, time, pkt.length, src, dst, mainop))
+            else: # response
+                status = NFS4_ERR[vars(pkt.nfs)['_all_fields']['nfs.status']]
+                output.append("#%-4s %s len=%-4s %-14s --> %-14s %-8s" \
+                % (idx, time, pkt.length, src, dst, status))
+        logger.info("\n\n=============== [NETWORK-TRACE] ===============\n%s\n=====================================" % '\n'.join(output))
+    else:
+        for pkt in nfs:
+            logger.info("cap: netwrok traffic (verbose mode):\n %s" % pkt.nfs.pretty_print())
 
 
 def timeit(method):
     def timed(*args, **kw):
-	ts = time.time()
-	result = method(*args, **kw)
-	te = time.time()
-	global gspent
-	gspent = (te - ts) * 1000
-	if 'log_time' in kw:
-	    name = kw.get('log_name', method.__name__.upper())
-	    kw['log_time'][name] = int(gspent)
-	else:
-	    #logger.debug("%r  %2.2f ms' % (method.__name__, gspent))
-	    pass
-	return result
+        ts = time.time()
+        result = method(*args, **kw)
+        te = time.time()
+        global gspent
+        gspent = (te - ts) * 1000
+        if 'log_time' in kw:
+            name = kw.get('log_name', method.__name__.upper())
+            kw['log_time'][name] = int(gspent)
+        else:
+            #logger.debug("%r  %2.2f ms' % (method.__name__, gspent))
+            pass
+        return result
 
     return timed
 
 
 @timeit
-def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, wait):
+def do_io(file_path, rw, pattern, io_size, count, skip, step, direct, lock, pause):
     global glocks
     global greadcnt
     global gwritecnt
+    global gerrcnt
+    global gdolock
 
     if rw in ['read', 'r', 'noop']:
-	openmode = os.O_RDONLY
+        openmode = os.O_RDONLY
     elif rw == 'write' or rw == 'w':
-	openmode = os.O_RDWR 
+        openmode = os.O_RDWR 
     elif rw == 'create' or rw == 'c':
-	openmode = os.O_RDWR 
-	openmode |= os.O_CREAT
-    if direct == 1:
-	openmode |= os.O_DIRECT
+        openmode = os.O_RDWR 
+        openmode |= os.O_EXCL
+        openmode |= os.O_CREAT
+    if direct == 1 and gplat == 'posix':
+        openmode |= os.O_DIRECT
+    elif direct == 1 and gplat == 'nt':
+        logger.warn("NT system doesn't support direct io")
+    
     # excl lock requires RDWR-ed fd
     if lock in ['excl', 'excl_blk']:
-	openmode |= os.O_RDWR 
+        openmode |= os.O_RDWR 
 
     if lock != 'noop':
-	do_lock = posix_lock
-	logger.debug("dbg: lock func is 'posix_lock'")
+        if gplat == 'posix':
+            gdolock = posix_lock
+        elif gplat == 'nt':
+            gdolock = nt_lock
+        logger.debug(" lock func is %s" % gdolock.__name__)
     else:
-	def do_lock(*args):
-	    pass
-	logger.debug("dbg: lock func is 'noop'")
+        def gdolock(*args):
+            pass
+        logger.debug(" lock func is 'noop'")
     if direct:
-	# use mmap make it page aligned
-	buf = mmap.mmap(-1, io_size)
-	buf.write(pattern * (io_size//len(pattern)) + pattern[:io_size%len(pattern)])
+        # use mmap make it page aligned
+        buf = mmap.mmap(-1, io_size)
+        buf.write(pattern * (io_size//len(pattern)) + pattern[:io_size%len(pattern)])
     else:
-	buf = pattern * (io_size//len(pattern)) + pattern[:io_size%len(pattern)]
+        buf = pattern * (io_size//len(pattern)) + pattern[:io_size%len(pattern)]
     try:
-	fd = os.open(file_path, openmode)
+        fd = os.open(file_path, openmode)
+        logger.info(" opened file: %s [mode: %d]" % (file_path, openmode))
     except Exception as e:
-	exit("[err]: open failed, %s" % str(e))
+        logger.error(" open failed, %s" % str(e))
+        gerrcnt += 1
+        exit(-1)
+    nextcnt = count
     stop = skip + (io_size + step) * count
     step += io_size 
-    logger.debug("[%d, %d %d]" %(skip, stop, step))
+    logger.info(" starts i/o against target region [start=%d, stop=%d, step=%d]" \
+            %(skip, stop, step))
     for idx, pos in enumerate(xrange(skip, stop, step), 1):
-	os.lseek(fd, pos, os.SEEK_SET)
-	try:
-	    if rw in ['write', 'w', 'create', 'c']:
-		do_lock(fd, lock, pos, io_size, None)
-		os.write(fd, buf)
-		gwritecnt += 1
-	    elif rw in ['read', 'r']:
-		do_lock(fd, lock, pos, io_size, None)
-		buf = os.read(fd, io_size)
-		greadcnt += 1
-	    elif rw == 'noop':
-		do_lock(fd, lock, pos, io_size, None)
-		pass
-	    logger.debug("dbg: #%d (mode=%s, offset=%d, len=%d)" % (idx, rw, pos, io_size))
-	    time.sleep(wait)
-	except IOError as e:
-	    if stoponerr:
-		logger.error("err: I/O Erorr [mode=%s offset=%d, len=%d]  failed  with error: %s" \
-			% (rw, pos, io_size, str(e)))
-		os.close(fd)
-
+        if interact:
+            while nextcnt:
+                input =  raw_input("Next or Continue? (n/c):")
+            if input == 'n':
+               nextcnt -= 1
+               break
+            elif input == 'c':
+               nextcnt = 0
+            else:
+               pass
+        os.lseek(fd, pos, os.SEEK_SET)
+        try:
+            if rw in ['write', 'w', 'create', 'c']:
+                gdolock(fd, lock, pos, io_size, None)
+                os.write(fd, buf)
+                logger.debug("write request #%d (offset=%d, len=%d) sent" % (idx, pos, io_size))
+                gwritecnt += 1
+            elif rw in ['read', 'r']:
+                gdolock(fd, lock, pos, io_size, None)
+                buf = os.read(fd, io_size)
+                logger.debug("read request #%d (offset=%d, len=%d) sent" % (idx, pos, io_size))
+                greadcnt += 1
+            elif rw == 'noop':
+                gdolock(fd, lock, pos, io_size, None)
+                pass
+        except Exception as e:
+            if stoponerr:
+                logger.error(" I/O request [mode=%s offset=%d, len=%d] failed  with error: %s" \
+                    % (rw, pos, io_size, str(e)))
+                gerrcnt += 1
+            logger.debug("pause for %d seccond" % pause)
+            time.sleep(pause)
     return fd
-
-
-def nt_lock(offset, length, mode):
-    """ create NT lock
-    """
-    return  #TBD
 
 
 def usage():
     print("\nsmartio - a smart and lite file protocol probing tool\n")
-    print("smartio.py <OPTIONS>")
+    print("smartio.py <OPTIONs>")
     OPT = "\n"
     OPT += "OPTIONs:\n\n"
-    OPT += "	--path	     : Target file or device to be IOed\n"
-    OPT += "	--rw	     : Write(create) or read, accepts values: create|c|write|w|read|r \n"
-    OPT += "	--iosize     : Size of each IO to be performed\n"
-    OPT += "	--blocksize  : The same as --iosize\n"
-    OPT += "	--count      : Number of IO to be issued\n"
-    OPT += "	--skip	     : The starting offset\n"
-    OPT += "	--step	     : The offset interval between each IO\n"
-    OPT += "	--direct     : Indicate if use direct IO, accepts 0|1 \n"
-    OPT += "	--lock	     : Indicate if create range lock before IO, accepts value excl|shared|unlock\n"
-    OPT += "	--wait	     : Duration of wait in between each IO\n"
-    OPT += "	--hold	     : Duration to hold after the completion of IO\n"
-    OPT += "	--debug      : If enable debugging logs \n"
-    OPT += "	--stoponerr  : If stop on error\n\n"
+    OPT += "        --path       : Target file or device to be IOed\n"
+    OPT += "        --rw:        : Write(create) or read, accepts values: create|c|write|w|read|r|noop (default: write)\n"
+    OPT += "        --iosize     : Size of each IO to be performed (default: 512B) \n"
+    OPT += "        --blocksize  : The same as --iosize\n"
+    OPT += "        --count      : Number of IO to be issued (default: 1)\n"
+    OPT += "        --skip       : The starting offset (default: 0)\n"
+    OPT += "        --step       : The offset interval between each IO (default: 0)\n"
+    OPT += "        --direct     : Indicate if use direct IO, accepts 0|1 (default: 1)\n"
+    OPT += "        --lock       : Indicate if create range lock before IO, accepts value excl|excl-blk|shared|unlock|noop (default: noop)\n"
+    OPT += "        --pause      : Duration of pause in between each IO (default: 0)\n"
+    OPT += "        --hold       : Duration to hold after the completion of IO (dfeault: 0)\n"
+    OPT += "        --debug      : If enable debugging logs (default: 0)\n"
+    OPT += "        --interact   : If enable interactive mode, in which mode we manually send each io (default: 0)\n"
+    OPT += "        --stoponerr  : If stop on error (default: 0)\n\n"
+    OPT += "        --output     : Path to logging file\n\n"
 
     print(OPT)
 
@@ -156,7 +377,7 @@ def stats(fp, iosize, count):
     """ summarize the performance stats
     """
     stats = "\n[stats]\n"
-    stats += "target	  : %s\n"
+    stats += "target      : %s\n"
     stats += "block size  : %d\n"
     stats += "write count : %d\n"
     stats += "read count  : %d\n"
@@ -174,221 +395,346 @@ def convert_size(rawsize):
     """
     sm = re.search('^(\d+)(\w{1,2})?', str(rawsize))
     if sm:
-	number = sm.group(1)
-	if sm.group(2):
-	    unit = sm.group(2)
-	    if unit.upper() == 'B':
-		return int(number)
-	    elif unit.upper() == 'K' or unit.upper() == 'KB':
-		return int(number) * 1024
-	    elif unit.upper() == 'M' or unit.upper() == 'MB':
-		return int(number) * 1024 ** 2
-	    elif unit.upper() == 'G' or unit.upper() == 'GB':
-		return int(number) * 1024 ** 3
-	    elif unit.upper() == 'T' or unit.upper() == 'TB':
-		return int(number) * 1024 ** 4
-	    elif unit.upper() == 'P' or unit.upper() == 'PB':
-		return int(number) * 1024 ** 5
-	    else:
-		sys.exit("ERR: Invalid unit: %s" % unit)
-	else:
-	    return int(number)
+        number = sm.group(1)
+        if sm.group(2):
+            unit = sm.group(2)
+            if unit.upper() == 'B':
+                return int(number)
+            elif unit.upper() == 'K' or unit.upper() == 'KB':
+                return int(number) * 1024
+            elif unit.upper() == 'M' or unit.upper() == 'MB':
+                return int(number) * 1024 ** 2
+            elif unit.upper() == 'G' or unit.upper() == 'GB':
+                return int(number) * 1024 ** 3
+            elif unit.upper() == 'T' or unit.upper() == 'TB':
+                return int(number) * 1024 ** 4
+            elif unit.upper() == 'P' or unit.upper() == 'PB':
+                return int(number) * 1024 ** 5
+            else:
+             sys.exit(" Invalid unit: %s" % unit)
+        else:
+            return int(number)
     else:
-	return rawsize
+        return rawsize
 
 
 def posix_lock(fd, mode, offset, length, data):
     """ posix locks
     """
     global glocks
+    global gerrcnt
     lockdata = struct.pack('hhllhh', LOCK_MODES[mode][0], \
-	    0, offset, length, 0, 0)
+        0, offset, length, 0, 0)
     try:
-	if data:
-	    if mode == 'excl_io' or mode == 'excl_blk_io':
-		rv = fcntl.fcntl(fd, LOCK_MODES[mode][1], lockdata)
-		# truncate extra content which exceeds end offest
-		logger.debug("dbg: range lock [mode=%s, offset=%d, len=%d] was created"\
-			% (mode, offset, length))
-		os.write(fd, data)
-	    elif mode == 'shared' or mode == 'unlock':
-		# NOTE
-		# the minimal size of kernel read is one page (4KB)
-		# hence the read may failed if target bytes
-		# which page was overlappped on other byte(s)
-		# owned by other lockowners
-		readdata = os.read(fd, length)
-		if readdata != data:
-		    logger.error("ERR: DMC! expect: %s | actual: %s" % (data, readdata))
-		    if stoponerr:
-			sys.exit(-1)
-		rv = fcntl.fcntl(fd, LOCK_MODES[mode][1], lockdata)
-		logger.debug("dbg: range lock [mode=%s, offset=%d, len=%d] was created"\
-			% (mode, offset, length))
-	else:
-	    try:
-		readdata = os.read(fd, length)
-	    except OSError as e:
-		logger.error("err:  I/O failed! [mode=%s, offset=%d, len=%d]: %s"\
-			% ('read', offset, length, str(e)))
-		if stoponerr:
-		    exit(-1)
-	    rv = fcntl.fcntl(fd, LOCK_MODES[mode][1], lockdata)
-	    logger.debug("dbg: range lock [mode=%s, offset=%d, len=%d] was created"\
-		    % (mode, offset, length))
+        if data:
+            if mode == 'excl_io' or mode == 'excl_blk_io':
+                rv = fcntl.fcntl(fd, LOCK_MODES[mode][1], lockdata)
+                # truncate extra content which exceeds end offest
+                logger.debug("posix range lock [mode=%s, offset=%d, len=%d] was set"\
+                    % (mode, offset, length))
+                os.write(fd, data)
+            elif mode == 'shared' or mode == 'unlock':
+                # NOTE
+                # the minimal size of kernel read is one page (4KB)
+                # hence the read may failed if target bytes
+                # which page was overlappped on other byte(s)
+                # owned by other lockowners
+                readdata = os.read(fd, length)
+                if readdata != data:
+                    logger.error("DMC! expect: %s | actual: %s" % (data, readdata))
+                    gerrcnt += 1
+                    if stoponerr:
+                        raise Exception(e)
+                rv = fcntl.fcntl(fd, LOCK_MODES[mode][1], lockdata)
+                logger.debug("posix range lock [mode=%s, offset=%d, len=%d] was set"\
+                    % (mode, offset, length))
+        else:
+            try:
+                readdata = os.read(fd, length)
+                logger.debug("read request (offset=%d, len=%d) was sent" % (offset, length))
+            except OSError as e:
+                logger.error("I/O failed! [mode=%s, offset=%d, len=%d]: %s"\
+                    % ('read', offset, length, str(e)))
+                gerrcnt += 1
+                if stoponerr:
+                    raise OSError(e)
+            rv = fcntl.fcntl(fd, LOCK_MODES[mode][1], lockdata)
+            logger.debug("posix range lock [mode=%s, offset=%d, len=%d] was set"\
+                % (mode, offset, length))
+            if mode != 'unlock':
+                glocks.append((offset, length))
     except Exception as e:
-	logger.error("err: lock failed! [mode=%s, offset=%d, len=%d]: %s"\
-		% (mode, offset, length, str(e)))
-	if stoponerr:
-	    exit(-1)
+        logger.error("posix lock failed [mode=%s, offset=%d, len=%d]: %s"\
+            % (mode, offset, length, str(e)))
+        gerrcnt += 1
+        if stoponerr:
+            exit(-1)
 
-    if mode == 'unlock':
-	return
-    glocks.append((offset, length))
 
+def nt_lock(fd, mode, offset, length, data):
+    """ nt lock
+    """
+    global glocks
+    global gerrcnt
+
+    try:
+        os.lseek(fd, offset, os.SEEK_SET)
+        if data: 
+            if mode == 'excl_io' or mode == 'excl_blk_io':
+                msvcrt.locking(fd, LOCK_MODES[mode], length)
+                # need to truncate extra content which exceeds end offset
+                os.write(fd, data)
+            elif mode == 'shared' or mode == 'unlock':
+                readdata = os.read(fd, length) 
+                if readdata != data:
+                    logger.error("DMC! expect: %s | actual: %s" % (data, readdata))
+                    gerrcnt += 1
+                    if stoponerr:
+                        sys.exit(-1)
+                msvcrt.locking(fd, LOCK_MODES[mode], length)
+                logger.debug("nt range lock [mode=%s, offset=%d, len=%d] was set"\
+                    % (mode, offset, length))
+        else:
+            try:
+                readdata = os.read(fd, length)
+                logger.debug("read request (offset=%d, len=%d) was sent" % (offset, length))
+            except OSError as e:
+                logger.error("I/O failed! [mode=%s, offset=%d, len=%d]: %s"\
+                    % ('read', offset, length, str(e)))
+                gerrcnt += 1
+                if stoponerr:
+                    raise OSError(e)
+            msvcrt.locking(fd, LOCK_MODES[mode], length)
+            if mode != 'unlock':
+                glocks.append((offset, length))
+            logger.debug("nt range lock [mode=%s, offset=%d, len=%d] was set"\
+                % (mode, offset, length))
+    except Exception as e:
+        logger.error("nt lock failed [mode=%s, offset=%d, len=%d]: %s"\
+            % (mode, offset, length, str(e)))
+        gerrcnt += 1
+        if stoponerr:
+            raise Exception(e)
+
+    return True
+
+
+def _compare_database(source=None, dest=None):
+    """ compare given files line by line
+    :param source      : file handle of target file
+    :param destination : lock mode to be used
+    """
+    srcfile = source
+    dstfile = dest
 
 def patterns(pattern):
     """ return requested io pattern
     """
     if pattern == 'one':
-	return '\xff'
+        return '\xff'
     elif pattern == 'zero':
-	return '\x00'
+        return '\x00'
     elif pattern == 'rand' or pattern == 'random':
-	return 'TBD'
+        return 'TBD'
     else:
-	return pattern
+        return pattern
 
 
 def post(fd, hold):
     """ cleanup after hold
     """
-    logger.info("info: I/O completed, holding for %d seconds" % hold)
+    count = len(glocks)
+    logger.info("I/O completed, holding for %d seconds" % hold)
     time.sleep(hold)
     for lck in glocks:
-	try:
-	    posix_lock(fd, 'unlock', lck[0], lck[1], None)
-	    logger.debug("dbg: unlock [offset=%d, len=%d]" % (lck[0], lck[1]))
-	except IOError as e:
-	    logger.error("err: unlock fail [offset=%d, len=%d]" % (lck[0], lck[1])) 
-	    if stoponerr:
-		exit(-1)
-    os.close(fd)
+        if interact:
+            while count:
+                input =  raw_input("Next or Continue? (n/c):")
+                if input == 'n':
+                   count -= 1
+                   break
+                elif input == 'c':
+                   count = 0
+                else:
+                   pass
+        gdolock(fd, 'unlock', lck[0], lck[1], None)
 
-
-def deleg():
-    """ validates if delegation bestowed
-    """
-    return
-
-
-def deleg_retrun():
-    """ validate if delegation recalled
-    """
-    return
-
+    try:
+        logger.debug("closing fd %d ..." % fd)
+        os.close(fd)
+    except Exception as e:
+       logger.error("failed to close fd %s: %s" % (fd, str(e)))
+       if stoponerr:
+           raise Exception(e)
 
 
 if __name__ == '__main__':
     """ main test
     """
     if len(sys.argv) == 1:
-	usage()
-	sys.exit(-1)
+        usage()
+        sys.exit(-1)
     # set default
     fp = None
     iosize = 512
     iopattern = '0xff'
     iocount = 1
-    rw = 'noop'
-    wait = 0
+    rw = 'read'
+    pause = 0
     hold = 0
     step = 0
     skip = 0
     lock= 'noop'
+    eth = None
     direct = 1
-    debug = 0
-    stoponerr = 1
-   
-    try:
-	opts, args = getopt.getopt(
-		sys.argv[1:], 
-		'h:', [
-			  'help',
-			  'path=', 
-			  'rw=',
-			  'iosize=',
-			  'blocksize=',
-			  'bs=',
-			  'pattern=',
-			  'count=', 
-			  'wait=', 
-			  'hold=', 
-			  'lock=', 
-			  'skip=', 
-			  'step=', 
-			  'direct=',
-			  'debug=',
-			  'stoponerr=',
-			  ]
-	)
+    gdebug = '0'
+    interact = 0 
+    stoponerr = 0
 
+    try:
+        opts, args = getopt.getopt(
+            sys.argv[1:], 
+            'h:', [
+                  'help',
+                  'path=', 
+                  'rw=',
+                  'iosize=',
+                  'blocksize=',
+                  'bs=',
+                  'pattern=',
+                  'count=', 
+                  'pause=', 
+                  'hold=', 
+                  'lock=', 
+                  'sniff=', 
+                  'skip=', 
+                  'step=', 
+                  'direct=',
+                  'debug=',
+                  'output=',
+                  'interact=',
+                  'stoponerr=',
+                  ]
+        )
     except getopt.GetoptError as e:
-	# print help information and exit:
-	sys.exit("Parameter Error: %s" % str(e))
+        # print help information and exit:
+        sys.exit("Parameter Error: %s" % str(e))
 
     for o, a in opts:
-	if o in ('--path'):
-	    fp = a  
-	elif o in ('--rw'):
-	    if a in ('write', 'w', 'create', 'c', 'read', 'r'):
-		rw = a
-	    else:
-		exit("[arg err]: invalid value for --rw, " \
-			+ "please use one from ['write', 'w', 'create', 'c', 'read', 'r']")
-	elif o in ('--iosize', '--blocksize', '--bs'):
-	    iosize=convert_size(a)
-	elif o in ('--pattern'):
-	    iopattern = patterns(a)
-	elif o in ('--count'):
-	    iocount = int(a)
-	elif o in ('--wait'):
-	    wait = int(a)
-	elif o in ('--hold'):
-	    hold = int(a)
-	elif o in ('--lock'):
-	    if a in ('excl', 'excl_blk', 'shared', 'unlock', 'noop'):
-		lock = a
-	    else:
-		exit("[arg err]: invalid value for --lock, " \
-			+ "please choose one from excl|excl_blk|shared|unlock")
-	elif o in ('--skip'):
-	    skip = convert_size(a)
-	elif o in ('--step'):
-	    step = convert_size(a)
-	elif o in ('--debug'):
-	    if a in ('1', '0'):
-		debug = int(a)
-	    else:
-		exit("[arg err]: invalid value for --debug, " \
-			+ "please choose one from ['1', '0']")
-	elif o in ('--stoponerr'):
-	    if a in ('1', '0'):
-		stoponerr = int(a)
-	    else:
-		exit("[arg err]: invalid value for --stoponerr, " \
-			+ "please choose one from ['1', '0']")
-	elif o in ('--direct'):
-	    if a in ('1', '0'):
-		direct = int(a)
-	    else:
-		exit("[arg err]: invalid value for --direct, " \
-			+ "please use one from ['1', '0']")
-	else:
-	    assert False, usage()
-    if debug:
-	logger.setLevel(logging.DEBUG)
-    logger.info("info: starts off I/O ...")
-    post(do_io(fp, rw, iopattern, iosize, iocount, skip, step, direct, lock, wait), hold)
+        if o in ('--path'):
+            fp = a  
+        elif o in ('--rw'):
+            if a in ('write', 'w', 'create', 'c', 'read', 'r', 'noop'):
+                rw = a
+            else:
+                exit("[arg err]: invalid value for --rw, " \
+                    + "please use one from ['write', 'w', 'create', 'c', 'read', 'r']")
+        elif o in ('--iosize', '--blocksize', '--bs'):
+            iosize=convert_size(a)
+        elif o in ('--pattern'):
+            iopattern = patterns(a)
+        elif o in ('--count'):
+            iocount = int(a)
+        elif o in ('--pause'):
+            pause = int(a)
+        elif o in ('--hold'):
+            hold = int(a)
+        elif o in ('--lock'):
+            if a in ('excl', 'excl_blk', 'shared', 'unlock', 'noop'):
+                lock = a
+            else:
+                exit("[arg err]: invalid value for --lock, " \
+                    + "please choose one from excl|excl_blk|shared|unlock")
+        elif o in ('--sniff'):
+            if a:
+                eth = a
+            else:
+                exit("[arg err]: invalid value for --sniff, " \
+                    + "please specify which interface to sniff")
+        elif o in ('--skip'):
+            skip = convert_size(a)
+        elif o in ('--step'):
+            step = convert_size(a)
+        elif o in ('--output'):
+            output = a
+            if output:
+                # create a logging format for log file
+                lfmt = logging.Formatter(
+                    '%(asctime)s - %(process)s - %(levelname)s: %(message)s'
+                )
+                lfh = logging.FileHandler(output, mode='a+', encoding='utf-8', delay=False)
+                lfh.setFormatter(lfmt)
+                logger.addHandler(lfh)
+        elif o in ('--debug'):
+            if a in ('1', '0', 'verbose'):
+                gdebug = a
+            else:
+                exit("[arg err]: invalid value for --debug, " \
+                    + "please choose one from ['1', '0', 'verbose']")
+        elif o in ('--interact'):
+            if a in ('1', '0'):
+                interact = int(a)
+            else:
+                exit("[arg err]: invalid value for --interact, " \
+                    + "please choose one from ['1', '0']")
+        elif o in ('--stoponerr'):
+            if a in ('1', '0'):
+                stoponerr = int(a)
+            else:
+                exit("[arg err]: invalid value for --stoponerr, " \
+                    + "please choose one from ['1', '0']")
+        elif o in ('--direct'):
+            if a in ('1', '0'):
+                direct = int(a)
+            else:
+                exit("[arg err]: invalid value for --direct, " \
+                    + "please use one from ['1', '0']")
+        else:
+            assert False, usage()
+    assert fp is not None, exit(" parameter '--path' is required!")
+
+    try:
+        import coloredlogs
+        coloropt = {
+            'milliseconds': True,
+            'fmt':'%(asctime)s,%(msecs)03d [%(process)d] %(levelname)s %(message)s',
+        }
+        if gdebug != '0':
+            coloropt['level'] = 'DEBUG'
+        coloredlogs.install(
+                level = 'DEBUG',
+                milliseconds=True, 
+                fmt='%(asctime)s,%(msecs)03d [%(process)d] %(levelname)s %(message)s'
+                )
+    except ImportError:
+        logger.error("warn: colored logs disabled")
+        pass
+
+    if gdebug != '0':
+        logger.setLevel(logging.DEBUG)
+
+    server = get_server(fp)
+    if eth: # analysis network trace
+        load =5 
+        def capture():
+            if server and eth:
+                caps = do_sniff(eth, server, '2049', load + 10)
+                if gdebug == 'verbose': 
+                    dissect(caps, server, True)
+                else:
+                    dissect(caps, server, False)
+            logger.info("cap: stop sniffing ...")
+        try:
+            pcap = Process(target=capture, kwargs={})
+        except Exception as e:
+            logger.error(" failed to sniff")
+            if stoponerr:
+                raise Exception(e)
+        logger.info(" wait 10 second for loading tshark ready ...")
+        pcap.start()
+        time.sleep(load)
+
+    logger.info(" starts off I/O ...")
+    post(do_io(fp, rw, iopattern, iosize, iocount, skip, step, direct, lock, pause), hold)
     stats(fp, iosize, iocount)
 
