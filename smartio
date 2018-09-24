@@ -8,7 +8,6 @@ import re
 import pdb
 import getopt
 import logging
-import pyshark 
 import thread
 from multiprocessing import Process
 
@@ -49,61 +48,61 @@ else:
 
 
 NFS4_OPCODE = {
-    '3'  : 'ACCESS',          # Check Access Rights
-    '4'  : 'CLOSE',           # CLOSE File 
-    '5'  : 'COMMIT',          # Commit Cached Data
-    '6'  : 'CREATE',          # Create a Non-regualr File Object
-    '7'  : 'DELEGPURGE',      # Purge Delegations Awaiting Recovery
-    '8'  : 'DELEGRETURN',     # Return Delegation
-    '9'  : 'GETATTR',         # Get Attributes
-    '10' : 'GETFH',           # Get Current Filehandle
-    '11' : 'LINK',            # Create Link to a File
-    '12' : 'LOCK',            # Create Lock
-    '13' : 'LOCKT',           # Test for Lock
-    '14' : 'LOCKU',           # Unlock File
-    '15' : 'LOOKUP',          # Look Up Filename
-    '16' : 'LOOKKUPP',        # Look Up Parent Directory 
-    '17' : 'NVERIFY',         # Verify Difference in Attributes
-    '18' : 'OPEN',            # Open a Regular File
-    '19' : 'OPENATTR',        # Open Named Attribute Directory
-    '20' : 'OPEN_CONFIRM',    # Confirm Open
-    '21' : 'OPEN_DOWNGRADE',  # Reduce Open File Access
-    '22' : 'PUTFH',           # Set Current Filehandle
-    '23' : 'PUTPUBFH',        # Set Public Filehandle
-    '24' : 'PUTROOTFH',       # Set Root Filehandle
-    '25' : 'READ',            # Read from File
-    '26' : 'READDIR',         # Read Directory
-    '27' : 'READLINK',        # Read Symbolic Link
-    '28' : 'REMOVE',          # Remove File System Object
-    '29' : 'RENAME',          # Rename Directory Entry
-    '30' : 'RENEW',           # Renew a Lease
-    '31' : 'RESTOREFH',       # Restore Saved File handle
-    '32' : 'SAVEFH',          # Save Current Filehandle
-    '33' : 'SECINFO',         # Obtain Available Security
-    '34' : 'SETATTR',         # Set Attributes
-    '35' : 'SETCLIENTID',     # Negotiate Client ID
+    '3'  : 'ACCESS',              # Check Access Rights
+    '4'  : 'CLOSE',               # CLOSE File 
+    '5'  : 'COMMIT',              # Commit Cached Data
+    '6'  : 'CREATE',              # Create a Non-regualr File Object
+    '7'  : 'DELEGPURGE',          # Purge Delegations Awaiting Recovery
+    '8'  : 'DELEGRETURN',         # Return Delegation
+    '9'  : 'GETATTR',             # Get Attributes
+    '10' : 'GETFH',               # Get Current Filehandle
+    '11' : 'LINK',                # Create Link to a File
+    '12' : 'LOCK',                # Create Lock
+    '13' : 'LOCKT',               # Test for Lock
+    '14' : 'LOCKU',               # Unlock File
+    '15' : 'LOOKUP',              # Look Up Filename
+    '16' : 'LOOKKUPP',            # Look Up Parent Directory 
+    '17' : 'NVERIFY',             # Verify Difference in Attributes
+    '18' : 'OPEN',                # Open a Regular File
+    '19' : 'OPENATTR',            # Open Named Attribute Directory
+    '20' : 'OPEN_CONFIRM',        # Confirm Open
+    '21' : 'OPEN_DOWNGRADE',      # Reduce Open File Access
+    '22' : 'PUTFH',               # Set Current Filehandle
+    '23' : 'PUTPUBFH',            # Set Public Filehandle
+    '24' : 'PUTROOTFH',           # Set Root Filehandle
+    '25' : 'READ',                # Read from File
+    '26' : 'READDIR',             # Read Directory
+    '27' : 'READLINK',            # Read Symbolic Link
+    '28' : 'REMOVE',              # Remove File System Object
+    '29' : 'RENAME',              # Rename Directory Entry
+    '30' : 'RENEW',               # Renew a Lease
+    '31' : 'RESTOREFH',           # Restore Saved File handle
+    '32' : 'SAVEFH',              # Save Current Filehandle
+    '33' : 'SECINFO',             # Obtain Available Security
+    '34' : 'SETATTR',             # Set Attributes
+    '35' : 'SETCLIENTID',         # Negotiate Client ID
     '36' : 'SETCLIENTID_CONFIRM', # Confirm Client ID
-    '37' : 'VERIFY',          # Verify Same Attributes
-    '38' : 'WRITE',           # Write to File
+    '37' : 'VERIFY',              # Verify Same Attributes
+    '38' : 'WRITE',               # Write to File
     '39' : 'RELEASE_LOCKOWNER',   # Release Lock-Owner State
 
-    '10044' : 'ILLEGAL',      # Illegal Operations
+    '10044' : 'ILLEGAL',          # Illegal Operations
 }
 
 NFS4_CB = {
-    '0' : 'CB_NULL',          # No Operation
-    1 : 'CB_COMPOUND',      # COMPOUND Operations
-    2 : 'CB_GETATTR',       # Get Attributes
-    3 : 'CB_RECALL',        # Recall an Open Dlegation
+    '0' : 'CB_NULL',              # No Operation
+    '1' : 'CB_COMPOUND',          # COMPOUND Operations
+    '2' : 'CB_GETATTR',           # Get Attributes
+    '3' : 'CB_RECALL',            # Recall an Open Dlegation
 
-    10044 : 'ILLEGAL',      # Illegal Callback Operations
+    '10044' : 'ILLEGAL',          # Illegal Callback Operations
 }
 
 NFS4_ERR = {
-    '0'     : 'NFS4_OK',      
-    '13'    : 'NFS4ERR_ACCESS',          
-    '10047' : 'NFS4ERR_ADMIN_REVOKED',          
-    '10032' : 'NFS4ERR_ATTRNOTSUPP',          
+    '0'     : 'NFS4_OK',
+    '13'    : 'NFS4ERR_ACCESS',
+    '10047' : 'NFS4ERR_ADMIN_REVOKED',
+    '10032' : 'NFS4ERR_ATTRNOTSUPP',
     '10040' : 'NFS4ERR_BADCHAR',
     '10001' : 'NFS4ERR_BADHANDLE',
     '10041' : 'NFS4ERR_BADNAME',
@@ -177,13 +176,12 @@ def get_server(path):
         if re.findall(r'^[0-9]+(?:\.[0-9]+){3}', line):
             line = line.split()
             mnts[line[1]] = line[0]
-   
 
     # check if passed path resides on a mounted path
     path = os.path.abspath(path)
     while not os.path.ismount(path):
         path = os.path.dirname(path)
-     
+
     if path in mnts.keys():
         return re.findall(r'[0-9]+(?:\.[0-9]+){3}', mnts[path])[0]
     else:
@@ -191,8 +189,9 @@ def get_server(path):
 
 
 def do_sniff(eth, ip, port, time=10):
-    """ start sniff 
-    """ 
+    """ start sniff
+    """
+    import pyshark
     bpffilter = 'host ' + ip + ' and ip and tcp ' + 'port '+ str(port)
     logger.info("cap: tshark filter on inferface %s: %s" % (eth, bpffilter))
     cap = pyshark.LiveCapture(interface=eth, bpf_filter=bpffilter)
@@ -365,7 +364,8 @@ def usage():
     OPT += "        --lock       : Indicate if create range lock before IO, accepts value excl|excl-blk|shared|unlock|noop (default: noop)\n"
     OPT += "        --pause      : Duration of pause in between each IO (default: 0)\n"
     OPT += "        --hold       : Duration to hold after the completion of IO (dfeault: 0)\n"
-    OPT += "        --debug      : If enable debugging logs (default: 0)\n"
+    OPT += "        --debug      : If enable debugging logs [0, 1, verbose] (default: 0)\n"
+    OPT += "        --sniff      : Interface to sniff for network trace ananlysis"
     OPT += "        --interact   : If enable interactive mode, in which mode we manually send each io (default: 0)\n"
     OPT += "        --stoponerr  : If stop on error (default: 0)\n\n"
     OPT += "        --output     : Path to logging file\n\n"
@@ -713,8 +713,8 @@ if __name__ == '__main__':
     if gdebug != '0':
         logger.setLevel(logging.DEBUG)
 
-    server = get_server(fp)
     if eth: # analysis network trace
+        server = get_server(fp)
         load =5 
         def capture():
             if server and eth:
